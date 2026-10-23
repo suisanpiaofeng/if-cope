@@ -18,8 +18,11 @@ export default function Workspace() {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   // 勾选的资源（对话上下文之一；发送后清空）
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // 勾选的产物（AIGC/类目里的成果，与资源分开存防 id 撞车）
+  const [selectedArts, setSelectedArts] = useState<Set<number>>(new Set());
   const [genError, setGenError] = useState<string | null>(null);
   const [generatingNote, setGeneratingNote] = useState<string | null>(null);
+  const [organizing, setOrganizing] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
   // 可拖动的分栏宽度
   const [filesW, setFilesW] = useState(264);
@@ -62,23 +65,33 @@ export default function Workspace() {
       .then((d) => setConfigured(d.hasKey && Boolean(d.baseUrl && d.chatModel)));
   }, []);
 
-  // ---------- 勾选（对话上下文） ----------
+  // ---------- 勾选（对话/生成上下文） ----------
   function toggleSelect(id: number) {
     setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   }
-  function toggleFolderSelect(folderId: number | "ungrouped") {
-    const ids = sources
+  function toggleSelectArtifact(id: number) {
+    setSelectedArts((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+  function toggleFolderSelect(folderId: number | "ungrouped" | "aigc") {
+    const srcIds = folderId === "aigc" ? [] : sources
       .filter((s) => (folderId === "ungrouped" ? s.category_id == null : s.category_id === folderId))
       .map((s) => s.id);
-    setSelected((prev) => {
+    const artIds = folderId === "ungrouped" ? [] : artifacts
+      .filter((a) => (folderId === "aigc" ? a.category_id == null : a.category_id === folderId))
+      .map((a) => a.id);
+    const flip = (prev: Set<number>, ids: number[]) => {
       const n = new Set(prev);
       const allOn = ids.length > 0 && ids.every((id) => n.has(id));
       ids.forEach((id) => (allOn ? n.delete(id) : n.add(id)));
       return n;
-    });
+    };
+    setSelected((prev) => flip(prev, srcIds));
+    setSelectedArts((prev) => flip(prev, artIds));
   }
   function toggleSelectAll() {
-    setSelected((prev) => (prev.size === sources.length ? new Set() : new Set(sources.map((s) => s.id))));
+    const allOn = selected.size === sources.length && selectedArts.size === artifacts.length;
+    setSelected(allOn ? new Set() : new Set(sources.map((s) => s.id)));
+    setSelectedArts(allOn ? new Set() : new Set(artifacts.map((a) => a.id)));
   }
 
   // ---------- 文件操作 ----------
@@ -255,7 +268,7 @@ export default function Workspace() {
       const res = await fetch("/api/artifacts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceIds: ids, kind }),
+        body: JSON.stringify({ sourceIds: ids, artifactIds: [...selectedArts], kind }),
       });
       const d = (await res.json()) as Artifact & { error?: string };
       if (!res.ok) throw new Error(d.error || "生成失败");
@@ -265,6 +278,23 @@ export default function Workspace() {
       setGenError(e instanceof Error ? e.message : String(e));
     } finally {
       setGeneratingNote(null);
+    }
+  }
+
+  /** 快捷功能：自动整理资源（模型归类 → 建类目 → 资源归位） */
+  async function organizeResources() {
+    if (organizing) return;
+    setOrganizing(true);
+    setGenError(null);
+    try {
+      const res = await fetch("/api/organize", { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "整理失败");
+      await load();
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOrganizing(false);
     }
   }
 
@@ -287,7 +317,9 @@ export default function Workspace() {
           categories={categories}
           genError={genError}
           selected={selected}
+          selectedArts={selectedArts}
           onToggleSource={toggleSelect}
+          onToggleArtifact={toggleSelectArtifact}
           onToggleFolder={toggleFolderSelect}
           onToggleAll={toggleSelectAll}
           onUpload={upload}
@@ -322,9 +354,11 @@ export default function Workspace() {
         <ChatPanel
           sources={sources}
           selected={selected}
-          onSelectionReset={() => setSelected(new Set())}
+          onSelectionReset={() => { setSelected(new Set()); setSelectedArts(new Set()); }}
           onGenerateNote={handleGenerateNote}
           generatingNote={generatingNote}
+          onOrganize={organizeResources}
+          organizing={organizing}
         />
       </div>
     </div>

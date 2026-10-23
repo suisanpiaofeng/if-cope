@@ -1,6 +1,6 @@
 /** 便签类型定义（客户端安全：只含数据，供 ChatPanel / 渲染器 / 服务端生成共用） */
 
-export type NoteKind = "report" | "mindmap" | "flowchart" | "outline" | "flashcards" | "quiz";
+export type NoteKind = "report" | "mindmap" | "flowchart" | "outline" | "quiz";
 
 export type NoteKindMeta = {
   kind: NoteKind;
@@ -15,7 +15,6 @@ export const NOTE_KINDS: NoteKindMeta[] = [
   { kind: "mindmap", label: "思维导图", icon: "🧠", ext: "md" },
   { kind: "flowchart", label: "流程图", icon: "📊", ext: "md" },
   { kind: "outline", label: "大纲", icon: "📋", ext: "md" },
-  { kind: "flashcards", label: "闪卡", icon: "🃏", ext: "md" },
   { kind: "quiz", label: "测验", icon: "❓", ext: "md" },
 ];
 

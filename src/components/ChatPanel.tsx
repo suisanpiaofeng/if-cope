@@ -51,7 +51,7 @@ function mapMsgs(data: { messages?: { role: string; content: string; citations: 
 
 /** 最右对话栏：主界面（最近 3 条）↔ 对话视图 ↔ 全部对话；回答进行中回退不中断 */
 export default function ChatPanel({
-  sources, selected, onSelectionReset, onGenerateNote, generatingNote,
+  sources, selected, onSelectionReset, onGenerateNote, generatingNote, onOrganize, organizing,
 }: {
   sources: Source[];
   /** 已勾选的资源（来自文件栏复选框） */
@@ -62,6 +62,9 @@ export default function ChatPanel({
   onGenerateNote?: (kind: string) => void;
   /** 正在生成的便签类型（null = 空闲） */
   generatingNote?: string | null;
+  /** 快捷功能：自动整理资源（AI 归类） */
+  onOrganize?: () => void;
+  organizing?: boolean;
 }) {
   const ready = sources.filter((s) => s.status === "ready");
   // 拖入对话框的文件（与勾选取并集作为上下文）
@@ -235,11 +238,45 @@ export default function ChatPanel({
   const currentTitle = threads.find((t) => t.id === threadId)?.title ?? "新对话";
 
   // 底部输入条（主界面 / 对话视图共用）
+  const quickBar = (
+    <div className="flex flex-wrap items-center gap-1 px-4 pb-1 pt-2">
+      <span className="num shrink-0 text-[10px] text-neutral-400">快捷功能</span>
+      {NOTE_KINDS.map((k) => (
+        <button
+          key={k.kind}
+          onClick={() => onGenerateNote?.(k.kind)}
+          disabled={!!generatingNote || !!organizing || context.length === 0}
+          title={`基于当前上下文生成${k.label}`}
+          className={`border px-2 py-0.5 text-[11px] transition-colors ${
+            generatingNote === k.kind
+              ? "border-violet-500 bg-violet-50 text-violet-700"
+              : "border-neutral-200 text-neutral-600 hover:border-neutral-400 hover:bg-neutral-50"
+          } disabled:opacity-40`}
+        >
+          <span className="mr-0.5">{k.icon}</span>
+          {k.label}
+        </button>
+      ))}
+      <span className="mx-0.5 h-3 w-px bg-neutral-200" />
+      <button
+        onClick={() => onOrganize?.()}
+        disabled={!!organizing || !!generatingNote || context.length === 0}
+        title="用 AI 自动把当前资源归入类目"
+        className="border border-violet-200 px-2 py-0.5 text-[11px] text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-40"
+      >
+        <span className="mr-0.5">🗂</span>
+        {organizing ? "整理中…" : "整理资源"}
+      </button>
+      {generatingNote && <span className="num self-center text-[10px] text-violet-500">生成中…</span>}
+    </div>
+  );
+
   const inputBar = (
     <>
       {error && (
         <div className="mx-4 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
       )}
+      {quickBar}
       <div className="border-t border-neutral-100 px-4 py-3"
         onDragOver={(e) => { if (e.dataTransfer.types.includes(DND_MIME)) { e.preventDefault(); setDropOver(true); } }}
         onDragLeave={() => setDropOver(false)}
@@ -267,27 +304,6 @@ export default function ChatPanel({
           <div className="flex min-w-0 items-center gap-1">
             <span className="mono shrink-0 rounded border border-neutral-200 px-1.5 py-0.5">{model ?? "未配置"}</span>
           </div>
-        </div>
-        {/* 便签条：一键把当前上下文变成结构化产物 */}
-        <div className="mb-2 flex flex-wrap items-center gap-1">
-          <span className="num shrink-0 text-[10px] text-neutral-400">便签</span>
-          {NOTE_KINDS.map((k) => (
-            <button
-              key={k.kind}
-              onClick={() => onGenerateNote?.(k.kind)}
-              disabled={!!generatingNote || context.length === 0}
-              title={`基于当前上下文生成${k.label}`}
-              className={`border px-2 py-0.5 text-[11px] transition-colors ${
-                generatingNote === k.kind
-                  ? "border-violet-500 bg-violet-50 text-violet-700"
-                  : "border-neutral-200 text-neutral-600 hover:border-neutral-400 hover:bg-neutral-50"
-              } disabled:opacity-40`}
-            >
-              <span className="mr-0.5">{k.icon}</span>
-              {k.label}
-            </button>
-          ))}
-          {generatingNote && <span className="num self-center text-[10px] text-violet-500">生成中…</span>}
         </div>
         <div className="flex gap-2">
           <textarea

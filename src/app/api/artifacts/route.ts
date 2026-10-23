@@ -19,8 +19,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { categoryId, sourceIds, kind } = (await req.json()) as {
-    categoryId?: number | null; sourceIds: number[]; kind?: string;
+  const { categoryId, sourceIds, kind, artifactIds } = (await req.json()) as {
+    categoryId?: number | null; sourceIds: number[]; kind?: string; artifactIds?: number[];
   };
   // 所有产物默认落 AIGC 类目（category_id = null），用户可再拖拽分类
   const targetCategory = categoryId ?? null;
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
   try {
     // 便签引擎：kind 决定 prompt 契约与渲染器；未知类型当复习笔记处理
     const useKind = isNoteKind(kind) ? kind : "report";
-    const { title, content, model } = await generateNote(sourceIds, useKind);
+    const { title, content, model } = await generateNote(sourceIds, useKind, artifactIds ?? []);
     const info = db
       .prepare(
         "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"

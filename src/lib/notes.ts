@@ -3,7 +3,7 @@
  * 架构：每种便签 = 一个输出格式契约（渲染器依赖该格式）+ 一个 prompt 模板 + 一个 mock。
  * 模型调用仍走 modelGateway 单出口；未配置模型时降级 mock，UI 链路可完整演示。
  */
-import { getSettings, isModelConfigured, recordUsage } from "./db";
+import db, { getSettings, isModelConfigured, recordUsage } from "./db";
 import { estimateTokens } from "./embed";
 import { modelEndpoint, modelHeaders } from "./modelGateway";
 import { gatherContext } from "./artifact";
@@ -34,13 +34,6 @@ const PROMPTS: Record<NoteKind, string> = {
 - 不要输出大纲以外的解释文字
 只使用资料里出现的内容，不要编造。`,
 
-  flashcards: `你是闪卡出题助手。根据资料片段生成记忆闪卡，严格遵守以下格式（每张卡片一段）：
-## 卡片 N
-**Q：** 问题（一句话）
-**A：** 答案（1-3 句，简洁）
-- 卡片数量 8-12 张，覆盖资料中的关键概念/公式/易混点
-- 第一行输出 # 标题
-- 只使用资料里出现的内容，不要编造`,
 
   quiz: `你是测验出题助手。根据资料片段生成自测题，严格遵守以下格式：
 # 标题
@@ -61,15 +54,32 @@ const TITLE_SUFFIX: Record<NoteKind, string> = {
   mindmap: "思维导图",
   flowchart: "流程图",
   outline: "复习大纲",
-  flashcards: "记忆闪卡",
   quiz: "自测题",
 };
 
 export type GeneratedNote = { title: string; content: string; model: string; kind: NoteKind };
 
-/** 生成便签：选中资源 → 拼上下文 → 按 kind 的格式契约生成 markdown */
-export async function generateNote(sourceIds: number[], kind: NoteKind): Promise<GeneratedNote> {
-  const { context, perSource } = gatherContext(sourceIds);
+/** 把选中的产物内容拼进上下文（每条最多 3000 字符） */
+function gatherArtifactContext(artifactIds: number[]): string {
+  if (!artifactIds.length) return "";
+  const ph = artifactIds.map(() => "?").join(",");
+  const rows = db
+    .prepare(`SELECT title, content FROM artifacts WHERE id IN (${ph})`)
+    .all(...artifactIds) as Array<{ title: string; content: string }>;
+  return rows.map((r) => `【产物】${r.title}\n${r.content.slice(0, 3000)}`).join("\n\n");
+}
+
+/** 生成便签：选中资源/产物 → 拼上下文 → 按 kind 的格式契约生成 markdown */
+export async function generateNote(
+  sourceIds: number[],
+  kind: NoteKind,
+  artifactIds: number[] = []
+): Promise<GeneratedNote> {
+  const src = sourceIds.length
+    ? gatherContext(sourceIds)
+    : { context: "", perSource: new Map<string, string[]>() };
+  const context = [src.context, gatherArtifactContext(artifactIds)].filter(Boolean).join("\n\n");
+  const perSource = src.perSource;
   const s = getSettings();
   const mainTitle = [...perSource.keys()][0] ?? "资料";
   const fallbackTitle = `${mainTitle}·${TITLE_SUFFIX[kind]}`;
@@ -121,10 +131,6 @@ function mockNote(kind: NoteKind, title: string, perSource: Map<string, string[]
     case "outline":
       return [`# ${title}（演示）`, "## 一、主题框架", `- ${pick(0)}`, `- ${pick(1)}`, "### 1.1 细分", "- 要点 A", "- 要点 B",
         "## 二、重点难点", `- ${pick(2)}`].join("\n");
-    case "flashcards": {
-      const cards = names.map((n, i) => [`## 卡片 ${i + 1}`, `**Q：** ${n} 的关键点是什么？`, `**A：** （演示）请复习资料《${n}》相关内容。`].join("\n"));
-      return [`# ${title}（演示）`, "", ...cards].join("\n");
-    }
     case "quiz":
       return [`# ${title}（演示）`, "## 第 1 题", `《${pick(0)}》主要讲了什么？`, "- A. 概念与框架", "- B. 无关内容", "- C. 以上都不对", "- D. 无法判断",
         "**答案：** A", "**解析：** 演示题目，配置模型后为真实生成。"].join("\n");

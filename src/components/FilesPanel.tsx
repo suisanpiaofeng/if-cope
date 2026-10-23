@@ -62,8 +62,8 @@ function checkOf(ids: number[], selected: Set<number>): CheckState {
 
 /** 第二栏：类目树（AIGC + 普通类目 + 未归类），支持勾选、拖拽移动、上传 */
 export default function FilesPanel({
-  sources, artifacts, categories, genError, selected,
-  onToggleSource, onToggleFolder, onToggleAll,
+  sources, artifacts, categories, genError, selected, selectedArts,
+  onToggleSource, onToggleFolder, onToggleAll, onToggleArtifact,
   onUpload, onAddLink, onAddText,
   onDeleteSource, onDeleteArtifact, onDeleteCategory, onNewCategory,
   onMoveSource, onMoveArtifact,
@@ -74,8 +74,11 @@ export default function FilesPanel({
   categories: { id: number; name: string }[];
   genError: string | null;
   selected: Set<number>;
+  /** 已勾选的产物（AIGC/类目里的成果） */
+  selectedArts: Set<number>;
   onToggleSource: (id: number) => void;
-  onToggleFolder: (folderId: number | "ungrouped") => void;
+  onToggleArtifact: (id: number) => void;
+  onToggleFolder: (folderId: number | "ungrouped" | "aigc") => void;
   onToggleAll: () => void;
   onUpload: (files: File[], categoryId: number | null, type: string) => Promise<void>;
   onAddLink: (url: string, categoryId: number | null) => Promise<void>;
@@ -250,7 +253,11 @@ export default function FilesPanel({
             const arts = folderArtifacts(f.id);
             const items = srcs.length + arts.length;
             const isAigc = f.id === "aigc";
-            const cState = checkOf(srcs.map((s) => s.id), selected);
+            // 类目选中态：资源（selected）+ 产物（selectedArts）合并计算
+            const onCount =
+              srcs.reduce((n, s) => n + (selected.has(s.id) ? 1 : 0), 0) +
+              arts.reduce((n, a) => n + (selectedArts.has(a.id) ? 1 : 0), 0);
+            const cState: CheckState = items === 0 || onCount === 0 ? "off" : onCount === items ? "on" : "partial";
             return (
               <div key={key}
                 onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOver(f.id); }}
@@ -259,13 +266,11 @@ export default function FilesPanel({
               >
                 <div className={`group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 ${
                   dragOver === f.id ? "bg-neutral-100 ring-1 ring-neutral-300" : "hover:bg-neutral-50"}`}>
-                  {!isAigc && (
-                    <Check
-                      state={cState}
-                      title={cState === "on" ? "取消选择" : "选中该类目全部资源"}
-                      onClick={(e) => { e.stopPropagation(); onToggleFolder(f.id as number | "ungrouped"); }}
-                    />
-                  )}
+                  <Check
+                    state={cState}
+                    title={cState === "on" ? "取消选择" : "选中该类目全部内容"}
+                    onClick={(e) => { e.stopPropagation(); onToggleFolder(f.id as number | "ungrouped" | "aigc"); }}
+                  />
                   <button onClick={() => toggle(key)} className="flex min-w-0 flex-1 items-center gap-1 text-left">
                     <svg className={`h-3 w-3 shrink-0 text-neutral-400 transition-transform ${isOpen ? "rotate-90" : ""}`} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
                       <path d="M4 2.5 8.5 6 4 9.5" />
@@ -327,7 +332,11 @@ export default function FilesPanel({
                         draggable
                         onDragStart={(e) => startDrag(e, { kind: "artifact", ids: [a.id] })}
                         onClick={() => onOpenArtifact(a)}
-                        className="group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-neutral-50">
+                        className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-neutral-50 ${
+                          selectedArts.has(a.id) ? "bg-neutral-100" : ""
+                        }`}>
+                        <Check state={selectedArts.has(a.id) ? "on" : "off"} title="选中用于生成/对话"
+                          onClick={(e) => { e.stopPropagation(); onToggleArtifact(a.id); }} />
                         <svg className="h-3 w-3 shrink-0 text-violet-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
                           <path d="M4 2h5l3 3v9H4V2Z" /><path d="M9 2v3h3" />
                         </svg>
