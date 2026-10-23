@@ -9,7 +9,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Sidebar from "@/components/Sidebar";
-import type { Source, TranslationDoc } from "@/lib/types";
+import type { AnyTranslationDoc, Source, TranslationDoc } from "@/lib/types";
+import { isPdfDoc } from "@/lib/types";
 
 type TrTab = {
   key: string;
@@ -18,7 +19,9 @@ type TrTab = {
   title: string;
   status: "translating" | "done" | "error";
   progress: { done: number; total: number };
-  doc: TranslationDoc | null;
+  doc: AnyTranslationDoc | null;
+  /** PDF 保真通道（pdf2zh，双 PDF 预览） */
+  pdfMode?: boolean;
   error?: string;
 };
 
@@ -122,12 +125,27 @@ export default function TranslatePage() {
   const runOne = useCallback(
     async (s: Source) => {
       const key = `t${Date.now().toString(36)}${tabSeq++}`;
+      const pdfMode = s.ext.toLowerCase() === "pdf";
       setTabs((prev) => [
         ...prev,
-        { key, artifactId: null, sourceId: s.id, title: s.title, status: "translating", progress: { done: 0, total: 0 }, doc: null },
+        { key, artifactId: null, sourceId: s.id, title: s.title, status: "translating", progress: { done: 0, total: 0 }, doc: null, pdfMode },
       ]);
       setActiveKey(key);
       try {
+        // PDF → pdf2zh 保真翻译（保留原版排版，产出双语/译文两份 PDF）
+        if (pdfMode) {
+          const res = await fetch("/api/translatePdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceId: s.id }),
+          });
+          const d = (await res.json()) as { error?: string; artifactId?: number; doc?: AnyTranslationDoc };
+          if (!res.ok || !d.doc || d.artifactId == null) throw new Error(d.error || `HTTP ${res.status}`);
+          patchTab(key, { status: "done", artifactId: d.artifactId, doc: d.doc });
+          loadHistory();
+          return;
+        }
+        // 非 PDF → 分段文本对照翻译（SSE 进度）
         const { artifactId } = await streamTranslate(s.id, (done, total) =>
           patchTab(key, { progress: { done, total } })
         );
@@ -169,11 +187,13 @@ export default function TranslatePage() {
     }
     const art = await fetch(`/api/artifacts/${id}`).then((r) => r.json());
     try {
-      const doc = JSON.parse(art.content) as TranslationDoc;
+      const doc = JSON.parse(art.content) as AnyTranslationDoc;
+      const pdf = isPdfDoc(doc);
+      const segN = pdf ? 0 : doc.segments.length;
       const key = `t${Date.now().toString(36)}${tabSeq++}`;
       setTabs((prev) => [
         ...prev,
-        { key, artifactId: id, sourceId: doc.sourceId, title: doc.sourceTitle, status: "done", doc, progress: { done: doc.segments.length, total: doc.segments.length } },
+        { key, artifactId: id, sourceId: doc.sourceId, title: doc.sourceTitle, status: "done", doc, pdfMode: pdf, progress: { done: segN, total: segN } },
       ]);
       setActiveKey(key);
     } catch {
@@ -288,7 +308,11 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
                       className="accent-neutral-900"
                     />
                     <span className="min-w-0 flex-1 truncate text-neutral-700">{s.title}</span>
-                    <span className="shrink-0 text-[10px] text-neutral-400">.{s.ext}</span>
+                    {s.ext === "pdf" ? (
+                      <span className="shrink-0 text-[10px] text-neutral-600" title="PDF：保真双语翻译（保留原版排版）">📄 保真</span>
+                    ) : (
+                      <span className="shrink-0 text-[10px] text-neutral-400">.{s.ext}</span>
+                    )}
                     {en && <span className="shrink-0 text-[10px]" title="疑似英文文献">🌐</span>}
                   </label>
                 );
@@ -379,16 +403,40 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
               </div>
               {active.doc && (
                 <>
-                  <span className="num shrink-0 text-[10px] text-neutral-400">
-                    {active.doc.segments.length} 段 · {active.doc.model}
-                    {active.doc.truncated ? " · 已截断" : ""}
-                  </span>
-                  <button onClick={() => download(active.doc!, "md")} className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50">
-                    下载 MD
-                  </button>
-                  <button onClick={() => download(active.doc!, "html")} className="shrink-0 border border-neutral-900 bg-neutral-900 px-2.5 py-1 text-xs text-white hover:bg-neutral-700">
-                    下载双语 HTML
-                  </button>
+                  {isPdfDoc(active.doc) ? (
+                    <>
+                      <span className="num shrink-0 text-[10px] text-neutral-400">
+                        PDF 保留排版 · {active.doc.model}
+                      </span>
+                      {active.doc.monoPdf && (
+                        <a
+                          href={`/api/translations/${active.artifactId}?which=mono&download=1`}
+                          className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50"
+                        >
+                          下载译文 PDF
+                        </a>
+                      )}
+                      <a
+                        href={`/api/translations/${active.artifactId}?which=dual&download=1`}
+                        className="shrink-0 border border-neutral-900 bg-neutral-900 px-2.5 py-1 text-xs text-white hover:bg-neutral-700"
+                      >
+                        下载双语 PDF
+                      </a>
+                    </>
+                  ) : (
+                    <>
+                      <span className="num shrink-0 text-[10px] text-neutral-400">
+                        {active.doc.segments.length} 段 · {active.doc.model}
+                        {active.doc.truncated ? " · 已截断" : ""}
+                      </span>
+                      <button onClick={() => download(active.doc as TranslationDoc, "md")} className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50">
+                        下载 MD
+                      </button>
+                      <button onClick={() => download(active.doc as TranslationDoc, "html")} className="shrink-0 border border-neutral-900 bg-neutral-900 px-2.5 py-1 text-xs text-white hover:bg-neutral-700">
+                        下载双语 HTML
+                      </button>
+                    </>
+                  )}
                 </>
               )}
               <Link href="/" className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-50">
@@ -397,7 +445,17 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
             </div>
 
             {/* 进度 / 错误 */}
-            {active.status === "translating" && (
+            {active.status === "translating" && active.pdfMode && (
+              <div className="px-6 py-3">
+                <div className="mb-1.5 text-[11px] text-neutral-500">
+                  ⏳ PDF 保真翻译中（保留原版排版，通常 1-3 分钟）…
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                  <div className="h-full w-1/3 animate-pulse rounded-full bg-neutral-900" />
+                </div>
+              </div>
+            )}
+            {active.status === "translating" && !active.pdfMode && (
               <div className="px-6 py-3">
                 <div className="mb-1 flex justify-between text-[11px] text-neutral-500">
                   <span>翻译中…（{active.progress.done}/{active.progress.total || "?"} 段）</span>
@@ -417,17 +475,20 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
               </div>
             )}
 
-            {/* 双文对照 */}
-            {active.doc && (
+            {/* 对照：PDF 保真版（双 PDF）/ 文本双栏 */}
+            {active.doc && isPdfDoc(active.doc) ? (
+              <PdfCompare sourceId={active.sourceId ?? active.doc.sourceId} artifactId={active.artifactId ?? 0} />
+            ) : active.doc ? (
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <div className="mx-auto max-w-[1160px] px-4 py-4">
                   <div className="sticky top-0 z-10 grid grid-cols-2 border border-neutral-300 bg-neutral-100 text-[11px] font-medium text-neutral-600">
                     <div className="border-r border-neutral-300 px-3 py-1.5">原文</div>
                     <div className="px-3 py-1.5">中文译文</div>
                   </div>
-                  {active.doc.segments.map((seg, i) => {
+                  {(active.doc as TranslationDoc).segments.map((seg, i) => {
+                    const doc = active.doc as TranslationDoc;
                     const newPage =
-                      i > 0 && seg.page !== null && active.doc!.segments[i - 1].page !== seg.page;
+                      i > 0 && seg.page !== null && doc.segments[i - 1].page !== seg.page;
                     return (
                       <div key={i}>
                         {newPage && (
@@ -450,10 +511,27 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
                   <div className="py-6 text-center text-[11px] text-neutral-400">— 翻译结束 —</div>
                 </div>
               </div>
-            )}
+            ) : null}
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+/** PDF 保真对照：左原版 PDF、右双语 PDF（均为完整原生 PDF，可各自滚动缩放） */
+function PdfCompare({ sourceId, artifactId }: { sourceId: number; artifactId: number }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
+      <div className="mb-2 flex items-center gap-3 text-[11px] text-neutral-500">
+        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-neutral-400" />原文（原版排版）</span>
+        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />中文双语对照（保留原版排版）</span>
+        <span className="ml-auto text-neutral-400">两页均为完整 PDF · 页码与原版一一对应，可各自滚动/缩放对照</span>
+      </div>
+      <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
+        <iframe src={`/api/preview/${sourceId}`} title="原文 PDF" className="min-h-0 w-full border border-neutral-300" />
+        <iframe src={`/api/translations/${artifactId}?which=dual`} title="双语 PDF" className="min-h-0 w-full border border-neutral-300" />
+      </div>
     </div>
   );
 }
