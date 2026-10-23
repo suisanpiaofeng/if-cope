@@ -51,7 +51,7 @@ function mapMsgs(data: { messages?: { role: string; content: string; citations: 
 
 /** 最右对话栏：主界面（最近 3 条）↔ 对话视图 ↔ 全部对话；回答进行中回退不中断 */
 export default function ChatPanel({
-  sources, selected, onSelectionReset, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg,
+  sources, selected, onSelectionReset, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve,
 }: {
   sources: Source[];
   /** 已勾选的资源（来自文件栏复选框） */
@@ -67,6 +67,8 @@ export default function ChatPanel({
   organizing?: boolean;
   /** 整理结果回执（短暂展示） */
   organizeMsg?: string | null;
+  /** 打开解题答疑画布 */
+  onOpenSolve?: () => void;
 }) {
   const ready = sources.filter((s) => s.status === "ready");
   // 拖入对话框的文件（与勾选取并集作为上下文）
@@ -259,6 +261,15 @@ export default function ChatPanel({
           {k.label}
         </button>
       ))}
+      <button
+        onClick={() => onOpenSolve?.()}
+        disabled={!!generatingNote || !!organizing}
+        title="解题 / 提问，生成带引用出处的非线性解答图"
+        className="border border-violet-300 px-2 py-0.5 text-[11px] text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-40"
+      >
+        <span className="mr-0.5">🔍</span>
+        解题答疑
+      </button>
       <span className="mx-0.5 h-3 w-px bg-neutral-200" />
       <button
         onClick={() => onOrganize?.()}

@@ -304,6 +304,21 @@ export default function Workspace() {
     }
   }
 
+  /** 打开解题答疑画布（已存在则激活） */
+  function openSolve() {
+    const key = "solve";
+    if (!tabs.some((t) => t.key === key)) {
+      setTabs((t) => [...t, { key, kind: "solve", title: "解题答疑" }]);
+    }
+    setActiveKey(key);
+  }
+
+  /** 引用跳转：按 sourceId 打开源预览 */
+  function openSourceById(id: number) {
+    const s = sources.find((x) => x.id === id);
+    if (s) openSource(s);
+  }
+
   function closeTab(key: string) {
     setTabs((t) => {
       const next = t.filter((x) => x.key !== key);
@@ -351,6 +366,9 @@ export default function Workspace() {
           onSelect={setActiveKey}
           onClose={closeTab}
           onSaveFile={saveFileText}
+          solveContext={selected.size > 0 ? [...selected] : sources.filter((s) => s.status === "ready").map((s) => s.id)}
+          onOpenSourceById={openSourceById}
+          onSolved={load}
         />
       </main>
 
@@ -366,6 +384,7 @@ export default function Workspace() {
           onOrganize={organizeResources}
           organizing={organizing}
           organizeMsg={organizeMsg}
+          onOpenSolve={openSolve}
         />
       </div>
     </div>
