@@ -11,7 +11,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { QaCanvasData, QaNode, QaCite } from "@/lib/qaCanvas";
+import type { QaCanvasData, QaNode, QaCite } from "@/lib/qaCanvasTypes";
 
 const KIND_STYLE: Record<string, { bg: string; border: string; text: string; tag: string }> = {
   question: { bg: "bg-neutral-900", border: "border-neutral-900", text: "text-white", tag: "问题" },
@@ -76,7 +76,6 @@ function layout(canvas: QaCanvasData, onCite?: QaNodeData["onCite"]) {
   const heightOf = (n: QaNode) =>
     52 + Math.min(220, Math.ceil((n.detail?.length ?? 0) / 26) * 20) + ((n.cites?.length ?? 0) > 0 ? 24 : 0);
 
-  const rfNodes: QaNode[] = [];
   const positions = new Map<string, { x: number; y: number }>();
   type Row = { nodes: QaNode[]; depth: number };
   const rows: Row[] = [];
@@ -124,9 +123,12 @@ function layout(canvas: QaCanvasData, onCite?: QaNodeData["onCite"]) {
 export default function QACanvas({
   content,
   onCite,
+  className,
 }: {
   content: string | QaCanvasData;
   onCite?: (c: QaCite) => void;
+  /** 画布容器样式（默认适合预览区内嵌） */
+  className?: string;
 }) {
   const canvas = useMemo<QaCanvasData | null>(() => {
     if (typeof content !== "string") return content;
@@ -151,7 +153,7 @@ export default function QACanvas({
   }
 
   return (
-    <div className="h-[calc(100vh-280px)] min-h-[440px] w-full border border-neutral-200">
+    <div className={className ?? "h-[calc(100vh-280px)] min-h-[440px] w-full border border-neutral-200"}>
       <ReactFlow nodes={flowNodes} edges={edges} nodeTypes={nodeTypes} fitView minZoom={0.15} nodesDraggable>
         <Background gap={18} size={1} color="#e5e5e5" />
         <Controls showInteractive={false} />

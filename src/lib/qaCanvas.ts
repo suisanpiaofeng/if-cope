@@ -1,29 +1,16 @@
 /**
- * 解题答疑画布：模型输出结构化解答图（JSON）→ React Flow 渲染非线性导图。
- * 契约：树状节点（parent 连接），每节点可带引用（指向资料的 sourceId/页码/原文片段）。
- * 参考 dsh-synapse 的画布交互范式，但语义是"解题 + 引用出处"，产物存 artifacts（type=qa-canvas）。
+ * 解题答疑画布：模型生成层（服务端专用，依赖 db/模型网关）。
+ * 类型与纯函数（normalize / markdown 导出）在 qaCanvasTypes.ts（客户端安全），
+ * 渲染组件与页面只允许依赖 qaCanvasTypes，禁止 import 本文件（会把原生模块拖进浏览器包）。
  */
-import db, { getSettings, isModelConfigured, recordUsage } from "./db";
+import { getSettings, isModelConfigured, recordUsage } from "./db";
 import { estimateTokens } from "./embed";
 import { modelEndpoint, modelHeaders } from "./modelGateway";
 import { gatherContext } from "./artifact";
+import { normalizeQaCanvas, type QaCanvasData } from "./qaCanvasTypes";
 
-export type QaCite = { sourceId: number; page: number | null; quote: string };
-
-export type QaNodeKind = "question" | "approach" | "step" | "knowledge" | "pitfall" | "answer";
-
-export type QaNode = {
-  id: string;
-  parent: string | null;
-  kind: QaNodeKind;
-  label: string;
-  detail: string;
-  cites?: QaCite[];
-};
-
-export type QaCanvasData = { title: string; nodes: QaNode[] };
-
-const NODE_KINDS: QaNodeKind[] = ["question", "approach", "step", "knowledge", "pitfall", "answer"];
+export type { QaCite, QaNode, QaNodeKind, QaCanvasData } from "./qaCanvasTypes";
+export { normalizeQaCanvas, qaCanvasToMarkdown } from "./qaCanvasTypes";
 
 const SYSTEM = `你是解题答疑助手。针对学生的提问输出一张结构化的解答图，严格输出一个 JSON 对象，不要输出其他文字：
 {"title":"解答标题","nodes":[{"id":"n1","parent":null,"kind":"question","label":"问题","detail":"问题的准确表述","cites":[{"sourceId":23,"page":2,"quote":"原文片段"}]}]}
@@ -34,45 +21,6 @@ const SYSTEM = `你是解题答疑助手。针对学生的提问输出一张结�
 - cites 仅在内容确有资料依据时给：sourceId 必须来自提供的资料编号，page 为页码（不知道写 null），quote 为原文短摘录（30 字内）；资料没覆盖的内容不要编造引用
 - 结构要求：question 下挂 approach/answer 主线，旁支挂 knowledge/pitfall；节点总数 6-14 个
 - 提问若包含图片，先正确读图再解题`;
-
-/** 校验并整形模型输出（模型输出不可全信） */
-export function normalizeQaCanvas(raw: unknown): QaCanvasData | null {
-  const obj = raw as Partial<QaCanvasData>;
-  if (!obj || typeof obj !== "object" || !Array.isArray(obj.nodes) || obj.nodes.length === 0) return null;
-  const seen = new Set<string>();
-  const nodes: QaNode[] = [];
-  for (const n of obj.nodes as Array<Partial<QaNode>>) {
-    const id = String(n.id ?? "").trim();
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    const kind: QaNodeKind = NODE_KINDS.includes(n.kind as QaNodeKind) ? (n.kind as QaNodeKind) : "step";
-    const cites = Array.isArray(n.cites)
-      ? n.cites
-          .filter((c) => c && Number.isFinite(Number(c.sourceId)))
-          .map((c) => ({
-            sourceId: Number(c.sourceId),
-            page: c.page == null ? null : Number(c.page),
-            quote: String(c.quote ?? "").slice(0, 60),
-          }))
-      : undefined;
-    nodes.push({
-      id,
-      parent: n.parent == null ? null : String(n.parent),
-      kind,
-      label: String(n.label ?? "").slice(0, 30) || "节点",
-      detail: String(n.detail ?? ""),
-      cites: cites && cites.length ? cites : undefined,
-    });
-  }
-  // 父指向不存在的节点 → 提升为根，防止图断裂
-  for (const n of nodes) {
-    if (n.parent && !seen.has(n.parent)) n.parent = null;
-  }
-  if (!nodes.some((n) => n.kind === "question")) {
-    nodes[0] = { ...nodes[0], kind: "question", parent: null };
-  }
-  return { title: String(obj.title ?? "").trim() || "解答", nodes };
-}
 
 /** 生成解答图：问题（+可选图片）+ 选中资料 → 结构化 JSON */
 export async function generateQaCanvas(
@@ -135,26 +83,6 @@ export async function generateQaCanvas(
   const canvas = normalizeQaCanvas(parsed);
   if (!canvas) throw new Error("模型输出的解答图结构不完整，请重试");
   return { canvas, model: s.chatModel };
-}
-
-/** 解答图 → markdown（下载/存档用） */
-export function qaCanvasToMarkdown(canvas: QaCanvasData): string {
-  const byParent = new Map<string | null, QaNode[]>();
-  for (const n of canvas.nodes) {
-    byParent.set(n.parent, [...(byParent.get(n.parent) ?? []), n]);
-  }
-  const lines: string[] = [`# ${canvas.title}`, ""];
-  const walk = (parent: string | null, depth: number) => {
-    for (const n of byParent.get(parent) ?? []) {
-      lines.push(`${"  ".repeat(depth)}- **${n.label}**${n.detail ? `：${n.detail}` : ""}`);
-      for (const c of n.cites ?? []) {
-        lines.push(`${"  ".repeat(depth)}  - 📎 出处：资料 #${c.sourceId}${c.page != null ? ` 第${c.page}页` : ""}${c.quote ? `（"${c.quote}"）` : ""}`);
-      }
-      walk(n.id, depth + 1);
-    }
-  };
-  walk(null, 0);
-  return lines.join("\n");
 }
 
 function mockCanvas(question: string): QaCanvasData {

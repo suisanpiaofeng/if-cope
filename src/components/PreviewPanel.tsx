@@ -7,7 +7,6 @@ import type { FilePreviewKind } from "@/lib/preview";
 import { isEditableExt } from "@/lib/preview";
 import { downloadArtifact } from "@/lib/download";
 import NoteRenderer from "@/components/notes/NoteRenderer";
-import SolvePanel from "@/components/SolvePanel";
 import CodeEditor from "./CodeEditor";
 
 export type SaveFileResult = {
@@ -17,26 +16,20 @@ export type SaveFileResult = {
 export type PreviewTab =
   | { key: string; kind: "source"; id: number; title: string; loading?: boolean; chunks?: { page: number | null; text: string }[] }
   | { key: string; kind: "artifact"; id: number; title: string; artifactType?: string; loading?: boolean; markdown?: string }
-  /** 解题答疑画布 */
-  | { key: string; kind: "solve"; title: string; loading?: boolean }
   /** 原始文件预览：markdown 渲染 / 图片 / 代码高亮 / 纯文本 / pdf / docx / 网页正文 */
   | { key: string; kind: "file"; fileType: FilePreviewKind; ext: string; id: number; title: string; loading?: boolean; text?: string; html?: string; error?: string };
 
 /** 第三栏：多标签预览（可开多个、× 关闭） */
 export default function PreviewPanel({
-  tabs, activeKey, onSelect, onClose, onSaveFile, solveContext, onOpenSourceById, onSolved,
+  tabs, activeKey, onSelect, onClose, onSaveFile, onOpenSourceById,
 }: {
   tabs: PreviewTab[];
   activeKey: string | null;
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
   onSaveFile: (id: number, text: string) => Promise<SaveFileResult>;
-  /** 答疑画布的依据（勾选的资料 id） */
-  solveContext?: number[];
   /** 引用跳转：按 sourceId 打开源预览 */
   onOpenSourceById?: (sourceId: number) => void;
-  /** 生成产物后刷新文件树 */
-  onSolved?: () => void;
 }) {
   const active = tabs.find((t) => t.key === activeKey) ?? null;
 
@@ -135,11 +128,6 @@ export default function PreviewPanel({
             {t.kind === "artifact" && (
               <svg className="h-3 w-3 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
                 <path d="M4 2h5l3 3v9H4V2Z" /><path d="M9 2v3h3" />
-              </svg>
-            )}
-            {t.kind === "solve" && (
-              <svg className="h-3 w-3 shrink-0 text-violet-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-                <circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5 14 14" strokeLinecap="round" />
               </svg>
             )}
             {t.kind === "file" && (
@@ -267,12 +255,6 @@ export default function PreviewPanel({
             NoteRenderer({ type: active.artifactType, content: active.markdown ?? "", onCite: (c) => onOpenSourceById?.(c.sourceId) }) ?? (
               <Markdown text={active.markdown ?? ""} />
             )
-          ) : active.kind === "solve" ? (
-            <SolvePanel
-              contextSourceIds={solveContext ?? []}
-              onCite={(c) => onOpenSourceById?.(c.sourceId)}
-              onSaved={onSolved}
-            />
           ) : active.error ? (
             <p className="pt-20 text-center text-sm text-red-500">{active.error}</p>
           ) : active.fileType === "docx" ? (

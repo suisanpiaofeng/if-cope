@@ -5,7 +5,7 @@
  * report / outline / 未知类型返回 null，由调用方用普通 Markdown 渲染兜底。
  */
 import dynamic from "next/dynamic";
-import type { QaCite } from "@/lib/qaCanvas";
+import type { QaCite } from "@/lib/qaCanvasTypes";
 
 const MindMap = dynamic(() => import("./MindMap"), {
   ssr: false,

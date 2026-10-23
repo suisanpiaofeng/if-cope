@@ -304,13 +304,9 @@ export default function Workspace() {
     }
   }
 
-  /** 打开解题答疑画布（已存在则激活） */
+  /** 打开解题答疑（独立功能页） */
   function openSolve() {
-    const key = "solve";
-    if (!tabs.some((t) => t.key === key)) {
-      setTabs((t) => [...t, { key, kind: "solve", title: "解题答疑" }]);
-    }
-    setActiveKey(key);
+    window.location.href = "/solve";
   }
 
   /** 引用跳转：按 sourceId 打开源预览 */
@@ -318,6 +314,16 @@ export default function Workspace() {
     const s = sources.find((x) => x.id === id);
     if (s) openSource(s);
   }
+
+  useEffect(() => {
+    // 深链：/?openSource=<id> —— 解题答疑页引用跳转过来时直接打开该源
+    const openId = new URLSearchParams(window.location.search).get("openSource");
+    if (openId) {
+      const s = sources.find((x) => x.id === Number(openId));
+      if (s) openSource(s);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sources.length]);
 
   function closeTab(key: string) {
     setTabs((t) => {
@@ -366,9 +372,7 @@ export default function Workspace() {
           onSelect={setActiveKey}
           onClose={closeTab}
           onSaveFile={saveFileText}
-          solveContext={selected.size > 0 ? [...selected] : sources.filter((s) => s.status === "ready").map((s) => s.id)}
           onOpenSourceById={openSourceById}
-          onSolved={load}
         />
       </main>
 

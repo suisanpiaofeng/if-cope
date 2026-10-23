@@ -24,6 +24,7 @@ export default function Sidebar({ configured }: { configured: boolean | null }) 
 
       <nav className={`flex-1 space-y-1 ${collapsed ? "px-2" : "px-2.5"}`}>
         <NavItem collapsed={collapsed} icon="grid" label="工作台" href="/" />
+        <NavItem collapsed={collapsed} icon="solve" label="解题答疑" href="/solve" />
         <NavItem collapsed={collapsed} icon="tools" label="工具库" href="/tools" />
         <NavItem collapsed={collapsed} icon="settings" label="设置" href="/settings" />
       </nav>
@@ -57,7 +58,7 @@ function CollapseBtn({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
 }
 
 function NavItem({ href, label, icon, active, collapsed }: {
-  href: string; label: string; icon: "grid" | "settings" | "tools"; active?: boolean; collapsed?: boolean;
+  href: string; label: string; icon: "grid" | "settings" | "tools" | "solve"; active?: boolean; collapsed?: boolean;
 }) {
   const pathname = usePathname();
   const on = active ?? pathname === href;
@@ -75,6 +76,13 @@ function NavItem({ href, label, icon, active, collapsed }: {
         <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
           <rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" />
           <rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" />
+        </svg>
+      ) : icon === "solve" ? (
+        <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+          <circle cx="7" cy="7" r="4.6" />
+          <path d="M10.4 10.4 14 14" strokeLinecap="round" />
+          <path d="M5.4 7.6c0-1 .8-1.6 1.7-1.6.8 0 1.5.5 1.5 1.3 0 .9-.7 1.1-1.2 1.4-.3.2-.4.4-.4.8" strokeLinecap="round" />
+          <circle cx="7" cy="10.9" r="0.5" fill="currentColor" stroke="none" />
         </svg>
       ) : icon === "tools" ? (
         <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
