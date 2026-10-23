@@ -214,7 +214,7 @@ export async function POST() {
     } else {
       continue;
     }
-    const info = move.run(target, src.id, src.category_id);
+    const info = move.run(target, src.id, target); // 第三参 = 目标类目：已在目标则跳过不计数
     moved += info.changes;
   }
 
