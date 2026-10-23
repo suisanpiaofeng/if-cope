@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Source } from "@/lib/types";
 import { DND_MIME, readDnd } from "@/lib/dnd";
+import { NOTE_KINDS } from "@/lib/noteKinds";
 
 type Thread = { id: number; title: string; created_at: number; message_count?: number };
 type Message = { role: "user" | "assistant"; content: string; citations?: Citation[] };
@@ -50,13 +51,17 @@ function mapMsgs(data: { messages?: { role: string; content: string; citations: 
 
 /** 最右对话栏：主界面（最近 3 条）↔ 对话视图 ↔ 全部对话；回答进行中回退不中断 */
 export default function ChatPanel({
-  sources, selected, onSelectionReset,
+  sources, selected, onSelectionReset, onGenerateNote, generatingNote,
 }: {
   sources: Source[];
   /** 已勾选的资源（来自文件栏复选框） */
   selected: Set<number>;
   /** 发送后重置全部选中 */
   onSelectionReset: () => void;
+  /** 便签：基于当前上下文生成结构化产物（导图/流程图/闪卡…） */
+  onGenerateNote?: (kind: string) => void;
+  /** 正在生成的便签类型（null = 空闲） */
+  generatingNote?: string | null;
 }) {
   const ready = sources.filter((s) => s.status === "ready");
   // 拖入对话框的文件（与勾选取并集作为上下文）
@@ -262,6 +267,27 @@ export default function ChatPanel({
           <div className="flex min-w-0 items-center gap-1">
             <span className="mono shrink-0 rounded border border-neutral-200 px-1.5 py-0.5">{model ?? "未配置"}</span>
           </div>
+        </div>
+        {/* 便签条：一键把当前上下文变成结构化产物 */}
+        <div className="mb-2 flex flex-wrap items-center gap-1">
+          <span className="num shrink-0 text-[10px] text-neutral-400">便签</span>
+          {NOTE_KINDS.map((k) => (
+            <button
+              key={k.kind}
+              onClick={() => onGenerateNote?.(k.kind)}
+              disabled={!!generatingNote || context.length === 0}
+              title={`基于当前上下文生成${k.label}`}
+              className={`border px-2 py-0.5 text-[11px] transition-colors ${
+                generatingNote === k.kind
+                  ? "border-violet-500 bg-violet-50 text-violet-700"
+                  : "border-neutral-200 text-neutral-600 hover:border-neutral-400 hover:bg-neutral-50"
+              } disabled:opacity-40`}
+            >
+              <span className="mr-0.5">{k.icon}</span>
+              {k.label}
+            </button>
+          ))}
+          {generatingNote && <span className="num self-center text-[10px] text-violet-500">生成中…</span>}
         </div>
         <div className="flex gap-2">
           <textarea

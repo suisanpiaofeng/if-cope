@@ -6,6 +6,7 @@ import type { Artifact } from "./FilesPanel";
 import type { FilePreviewKind } from "@/lib/preview";
 import { isEditableExt } from "@/lib/preview";
 import { downloadArtifact } from "@/lib/download";
+import NoteRenderer from "@/components/notes/NoteRenderer";
 import CodeEditor from "./CodeEditor";
 
 export type SaveFileResult = {
@@ -14,7 +15,7 @@ export type SaveFileResult = {
 
 export type PreviewTab =
   | { key: string; kind: "source"; id: number; title: string; loading?: boolean; chunks?: { page: number | null; text: string }[] }
-  | { key: string; kind: "artifact"; id: number; title: string; loading?: boolean; markdown?: string }
+  | { key: string; kind: "artifact"; id: number; title: string; artifactType?: string; loading?: boolean; markdown?: string }
   /** 原始文件预览：markdown 渲染 / 图片 / 代码高亮 / 纯文本 / pdf / docx / 网页正文 */
   | { key: string; kind: "file"; fileType: FilePreviewKind; ext: string; id: number; title: string; loading?: boolean; text?: string; html?: string; error?: string };
 
@@ -249,7 +250,9 @@ export default function PreviewPanel({
           {active.kind === "source" ? (
             <SourceContent chunks={active.chunks ?? []} />
           ) : active.kind === "artifact" ? (
-            <Markdown text={active.markdown ?? ""} />
+            NoteRenderer({ type: active.artifactType, content: active.markdown ?? "" }) ?? (
+              <Markdown text={active.markdown ?? ""} />
+            )
           ) : active.error ? (
             <p className="pt-20 text-center text-sm text-red-500">{active.error}</p>
           ) : active.fileType === "docx" ? (

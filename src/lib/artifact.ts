@@ -6,10 +6,11 @@ const SYSTEM = `你是学习资料整理助手。根据提供的资料片段生�
 # 标题、## 一、概述、## 二、核心要点（分条）、## 三、术语表（表格）、## 四、可能的考点。
 只使用资料里出现的内容，不要编造。`;
 
-/** 生成摘要笔记：从类目选中的资源取块 → 模型（或 mock）产出 markdown → 存 artifacts */
-export async function generateSummary(sourceIds: number[]): Promise<{
-  title: string; content: string; model: string;
-}> {
+/** 从选中资源取块拼上下文（供复习笔记 / 便签引擎共用） */
+export function gatherContext(sourceIds: number[]): {
+  context: string;
+  perSource: Map<string, string[]>;
+} {
   if (!sourceIds.length) throw new Error("请先选择至少一份可检索的资源");
   const ph = sourceIds.map(() => "?").join(",");
   const rows = db
@@ -29,7 +30,14 @@ export async function generateSummary(sourceIds: number[]): Promise<{
   const context = [...perSource.entries()]
     .map(([title, chunks]) => `《${title}》\n${chunks.join("\n")}`)
     .join("\n\n");
+  return { context, perSource };
+}
 
+/** 生成摘要笔记：从类目选中的资源取块 → 模型（或 mock）产出 markdown → 存 artifacts */
+export async function generateSummary(sourceIds: number[]): Promise<{
+  title: string; content: string; model: string;
+}> {
+  const { context, perSource } = gatherContext(sourceIds);
   const s = getSettings();
   const fallbackTitle = `${[...perSource.keys()][0] ?? "资料"}·摘要笔记`;
 

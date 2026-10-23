@@ -19,6 +19,7 @@ export default function Workspace() {
   // 勾选的资源（对话上下文之一；发送后清空）
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [genError, setGenError] = useState<string | null>(null);
+  const [generatingNote, setGeneratingNote] = useState<string | null>(null);
   const [configured, setConfigured] = useState<boolean | null>(null);
   // 可拖动的分栏宽度
   const [filesW, setFilesW] = useState(264);
@@ -235,11 +236,36 @@ export default function Workspace() {
   function openArtifact(a: Artifact) {
     const key = `artifact-${a.id}`;
     if (tabs.some((t) => t.key === key)) { setActiveKey(key); return; }
-    setTabs((t) => [...t, { key, kind: "artifact", id: a.id, title: a.title, loading: true }]);
+    setTabs((t) => [...t, { key, kind: "artifact", id: a.id, title: a.title, artifactType: a.type, loading: true }]);
     setActiveKey(key);
     fetch(`/api/artifacts/${a.id}`)
       .then((r) => r.json())
-      .then((d) => setTabs((t) => t.map((x) => x.key === key ? { ...x, loading: false, markdown: d.content } : x)));
+      .then((d) => setTabs((t) => t.map((x) => x.key === key ? { ...x, loading: false, markdown: d.content, artifactType: d.type } : x)));
+  }
+
+  /** 便签生成：基于当前选中（或全部）资源生成结构化产物并打开预览 */
+  async function handleGenerateNote(kind: string) {
+    if (generatingNote) return;
+    setGeneratingNote(kind);
+    setGenError(null);
+    try {
+      const ids = selected.size > 0
+        ? [...selected]
+        : sources.filter((s) => s.status === "ready").map((s) => s.id);
+      const res = await fetch("/api/artifacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceIds: ids, kind }),
+      });
+      const d = (await res.json()) as Artifact & { error?: string };
+      if (!res.ok) throw new Error(d.error || "生成失败");
+      await load();
+      openArtifact(d);
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeneratingNote(null);
+    }
   }
 
   function closeTab(key: string) {
@@ -297,6 +323,8 @@ export default function Workspace() {
           sources={sources}
           selected={selected}
           onSelectionReset={() => setSelected(new Set())}
+          onGenerateNote={handleGenerateNote}
+          generatingNote={generatingNote}
         />
       </div>
     </div>

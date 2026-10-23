@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
-import { generateSummary } from "@/lib/artifact";
+import { generateNote } from "@/lib/notes";
+import { isNoteKind } from "@/lib/noteKinds";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -18,8 +19,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { categoryId, sourceIds, type } = (await req.json()) as {
-    categoryId?: number | null; sourceIds: number[]; type?: string;
+  const { categoryId, sourceIds, kind } = (await req.json()) as {
+    categoryId?: number | null; sourceIds: number[]; kind?: string;
   };
   // 所有产物默认落 AIGC 类目（category_id = null），用户可再拖拽分类
   const targetCategory = categoryId ?? null;
@@ -28,12 +29,14 @@ export async function POST(req: NextRequest) {
     if (!cat) return NextResponse.json({ error: "类目不存在" }, { status: 400 });
   }
   try {
-    const { title, content, model } = await generateSummary(sourceIds);
+    // 便签引擎：kind 决定 prompt 契约与渲染器；未知类型当复习笔记处理
+    const useKind = isNoteKind(kind) ? kind : "report";
+    const { title, content, model } = await generateNote(sourceIds, useKind);
     const info = db
       .prepare(
         "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
       )
-      .run(targetCategory, type ?? "summary", title, content, JSON.stringify(sourceIds), model, Date.now());
+      .run(targetCategory, useKind, title, content, JSON.stringify(sourceIds), model, Date.now());
     const row = db.prepare("SELECT * FROM artifacts WHERE id = ?").get(Number(info.lastInsertRowid));
     return NextResponse.json({ ...(row as object), source_ids: sourceIds });
   } catch (err) {
