@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 /** 最左功能竖栏：可收起为窄图标栏（参考 OpenFic） */
@@ -30,7 +31,8 @@ export default function Sidebar({ configured }: { configured: boolean | null }) 
       )}
 
       <nav className={`flex-1 space-y-1 ${collapsed ? "px-2" : "px-2.5"}`}>
-        <NavItem collapsed={collapsed} active icon="grid" label="工作台" href="/" />
+        <NavItem collapsed={collapsed} icon="grid" label="工作台" href="/" />
+        <NavItem collapsed={collapsed} icon="tools" label="工具库" href="/tools" />
         <NavItem collapsed={collapsed} icon="settings" label="设置" href="/settings" />
       </nav>
 
@@ -63,8 +65,10 @@ function CollapseBtn({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
 }
 
 function NavItem({ href, label, icon, active, collapsed }: {
-  href: string; label: string; icon: "grid" | "settings"; active?: boolean; collapsed?: boolean;
+  href: string; label: string; icon: "grid" | "settings" | "tools"; active?: boolean; collapsed?: boolean;
 }) {
+  const pathname = usePathname();
+  const on = active ?? pathname === href;
   return (
     <Link
       href={href}
@@ -72,13 +76,18 @@ function NavItem({ href, label, icon, active, collapsed }: {
       className={`flex items-center rounded-lg text-[13px] transition-colors ${
         collapsed ? "justify-center p-2" : "gap-2 px-2.5 py-2"
       } ${
-        active ? "bg-neutral-100 font-medium text-neutral-900" : "text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
+        on ? "bg-neutral-100 font-medium text-neutral-900" : "text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
       }`}
     >
       {icon === "grid" ? (
         <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
           <rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" />
           <rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" />
+        </svg>
+      ) : icon === "tools" ? (
+        <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+          <path d="M9.8 2.2a3.4 3.4 0 0 0-3.3 4.3L2.3 10.7a1.3 1.3 0 0 0 1.8 1.8l4.2-4.2a3.4 3.4 0 0 0 4.3-3.3l-1.9 1.9-1.8-.4-.4-1.8 1.9-1.9a3.5 3.5 0 0 0-.6-.6Z" />
+          <circle cx="3.4" cy="12.6" r="0.6" fill="currentColor" stroke="none" />
         </svg>
       ) : (
         <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
