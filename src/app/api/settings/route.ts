@@ -12,6 +12,8 @@ export async function GET() {
     ...s,
     apiKey: s.apiKey ? `****${s.apiKey.slice(-4)}` : "",
     hasKey: Boolean(s.apiKey),
+    translateApiKey: s.translateApiKey ? `****${s.translateApiKey.slice(-4)}` : "",
+    hasTranslateKey: Boolean(s.translateApiKey),
   });
 }
 
@@ -39,6 +41,16 @@ export async function PUT(req: NextRequest) {
     provider: providerFor(baseUrl),
     embeddingDimension: embedModel ? embeddingDimension : 0,
     verifiedAt: body.embeddingDimension != null || body.apiKey ? Date.now() : current.verifiedAt,
+    // 翻译用途上游：字段存在才更新（空串 = 清除回退对话模型；遮罩 Key 保持原值）
+    ...(body.translateBaseUrl !== undefined && {
+      translateBaseUrl: normalizeBaseUrl(String(body.translateBaseUrl)),
+    }),
+    ...(body.translateApiKey !== undefined && {
+      translateApiKey: String(body.translateApiKey).startsWith("****")
+        ? current.translateApiKey
+        : String(body.translateApiKey).trim(),
+    }),
+    ...(body.translateModel !== undefined && { translateModel: String(body.translateModel).trim() }),
   };
 
   if (baseUrl && !/^https?:\/\//.test(baseUrl)) {

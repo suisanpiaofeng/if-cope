@@ -12,6 +12,10 @@ type Settings = {
   provider?: "iflink" | "custom";
   embeddingDimension?: number;
   verifiedAt?: number;
+  /** 翻译用途上游（可选） */
+  translateBaseUrl?: string;
+  translateApiKey?: string;
+  translateModel?: string;
 };
 
 type TestResult = {
@@ -49,6 +53,9 @@ export default function SettingsPage() {
   const [hasKey, setHasKey] = useState(false);
   const [chatModel, setChatModel] = useState("");
   const [embedModel, setEmbedModel] = useState("");
+  const [translateBaseUrl, setTranslateBaseUrl] = useState("");
+  const [translateApiKey, setTranslateApiKey] = useState("");
+  const [translateModel, setTranslateModel] = useState("");
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [test, setTest] = useState<TestResult | null>(null);
@@ -66,6 +73,9 @@ export default function SettingsPage() {
         setHasKey(Boolean(d.hasKey));
         setChatModel(d.chatModel);
         setEmbedModel(d.embedModel);
+        setTranslateBaseUrl(d.translateBaseUrl ?? "");
+        setTranslateApiKey(d.translateApiKey ?? "");
+        setTranslateModel(d.translateModel ?? "");
       });
     loadUsage();
   }, []);
@@ -115,6 +125,9 @@ export default function SettingsPage() {
           embedModel,
           embeddingDimension:
             test?.ok && embedModel ? test.embedDimension ?? undefined : undefined,
+          translateBaseUrl,
+          translateApiKey,
+          translateModel,
         }),
       });
       const data = await res.json();
@@ -224,6 +237,43 @@ export default function SettingsPage() {
           <datalist id="model-options">
             {test?.models.map((m) => <option key={m} value={m} />)}
           </datalist>
+
+          {/* 翻译用途上游：独立接口，留空回退对话模型 */}
+          <div className="mt-5 rounded-lg border border-neutral-200 p-4">
+            <div className="text-sm font-medium">翻译模型（可选）</div>
+            <div className="mt-0.5 text-xs text-neutral-500">
+              文献翻译使用此独立接口（可接入与对话不同的模型）；三项留空则回退上面的对话模型
+            </div>
+            <div className="mt-3 grid gap-4 sm:grid-cols-3">
+              <Field label="Base URL" hint="如 https://api.deepseek.com/v1">
+                <input
+                  value={translateBaseUrl}
+                  onChange={(e) => setTranslateBaseUrl(e.target.value)}
+                  placeholder="留空 = 用对话模型的地址"
+                  className="mono w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400"
+                />
+              </Field>
+              <Field label="API Key" hint="留空 = 用对话模型的 Key">
+                <input
+                  value={translateApiKey}
+                  onChange={(e) => setTranslateApiKey(e.target.value)}
+                  placeholder="sk-…"
+                  type="password"
+                  autoComplete="off"
+                  className="mono w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400"
+                />
+              </Field>
+              <Field label="翻译模型" hint="如 deepseek-chat / gpt-4o-mini">
+                <input
+                  value={translateModel}
+                  onChange={(e) => setTranslateModel(e.target.value)}
+                  placeholder="留空 = 用对话模型"
+                  list="model-options"
+                  className="mono w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400"
+                />
+              </Field>
+            </div>
+          </div>
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-3">

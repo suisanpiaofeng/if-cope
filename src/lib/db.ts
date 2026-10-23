@@ -156,6 +156,10 @@ export type ModelSettings = {
   /** 固定向量维度，防止在不同 embedding 模型之间混用索引 */
   embeddingDimension?: number;
   verifiedAt?: number;
+  /** 翻译用途上游（文献翻译专用独立接口；留空回退对话模型） */
+  translateBaseUrl?: string;
+  translateApiKey?: string;
+  translateModel?: string;
 };
 
 const EMPTY: ModelSettings = {
@@ -182,6 +186,9 @@ export function getSettings(): ModelSettings {
       chatModel: String(parsed.chatModel ?? "").trim(),
       embedModel: String(parsed.embedModel ?? "").trim(),
       embeddingDimension: Number(parsed.embeddingDimension ?? 0) || 0,
+      translateBaseUrl: String(parsed.translateBaseUrl ?? "").trim(),
+      translateApiKey: String(parsed.translateApiKey ?? ""),
+      translateModel: String(parsed.translateModel ?? "").trim(),
     };
   } catch {
     return { ...EMPTY };
