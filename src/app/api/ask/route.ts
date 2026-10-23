@@ -14,14 +14,17 @@ import {
   type QaMapCite,
   type QaMapNode,
 } from "@/lib/qaMapTypes";
+import { webSearch, webHitsToContext, type WebHit } from "@/lib/webSearch";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const SYSTEM = `你是解题答疑助手，正在和学生进行多轮对话式学习。要求：
 - 用 markdown 回答，先给结论再展开；分点清晰，公式用行内代码或 LaTeX 风格写
-- 引用规则（严格遵守）：只有资料片段确实支撑了某个论断时，才在该论断后标注 [n]（n 为资料编号）；
+- 引用规则（严格遵守）：只有「资料片段」确实支撑了某个论断时，才在该论断后标注 [n]（n 为资料编号）；
   若资料与问题无关、或不足以支撑，就按通用知识干干净净地回答，**一个 [n] 都不要标**（宁缺毋滥，绝不挂无关引用）
+- 若提供了「网络检索结果」：可参考其内容并直接给出链接（markdown 链接），网络来源不使用 [n] 标注；
+  网络内容可能有时效性，涉及时间敏感的信息要注明“以官方最新信息为准”
 - 这是地图上的一个节点：回答自成一体（读者可能只看这张卡），同时承接对话历史的脉络
 - 长度适中（200-400 字为宜），突出学生能带走的结论`;
 
@@ -93,6 +96,11 @@ export async function POST(req: NextRequest) {
       quote: h.quote,
     }));
 
+    // ── 联网搜索：问题带时效性（新闻/最新/今年…）或资料为空时补参考（失败静默）。
+    //    注意 retrieve 恒返回 top-k（再不相关也强制召回），不能用「hits 是否为空」判断资料命中 ──
+    const looksFresh = /新闻|最新|今天|今日|现在|目前|当前|最近|近年|20\d{2}|发生了什么|谁是现任|进展|热点|实时|今日/.test(q);
+    const webHits: WebHit[] = q && (looksFresh || hits.length === 0) ? await webSearch(q) : [];
+
     // ── 模型回答 ──
     const s = getSettings();
     let answer: string;
@@ -107,7 +115,7 @@ export async function POST(req: NextRequest) {
       const userContent: Array<Record<string, unknown>> = [
         {
           type: "text",
-          text: `学生提问：${q}${hits.length ? `\n\n资料片段：\n${buildContextBlocks(hits).join("\n\n")}` : "\n\n（未检索到相关资料，按通用知识回答）"}`,
+          text: `学生提问：${q}${hits.length ? `\n\n资料片段：\n${buildContextBlocks(hits).join("\n\n")}` : "\n\n（未检索到相关资料，按通用知识回答）"}${webHits.length ? `\n\n${webHitsToContext(webHits)}` : ""}`,
         },
       ];
       if (body.image) userContent.push({ type: "image_url", image_url: { url: body.image } });
@@ -158,6 +166,7 @@ export async function POST(req: NextRequest) {
       y: Number.isFinite(body.y) && autoRouted === false ? Number(body.y) : pos.y,
       w: 340,
       h: 280,
+      relation: parentId ? "追问" : undefined,
     };
 
     let savedMapId = body.mapId ?? null;
@@ -174,7 +183,7 @@ export async function POST(req: NextRequest) {
       savedMapId = Number(info.lastInsertRowid);
     }
 
-    return NextResponse.json({ mapId: savedMapId, node, answer, citations, model, autoRouted, parentId });
+    return NextResponse.json({ mapId: savedMapId, node, answer, citations, model, autoRouted, parentId, webUsed: webHits.length > 0 });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }

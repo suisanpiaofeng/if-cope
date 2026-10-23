@@ -11,12 +11,15 @@ import {
   ReactFlow,
   Background,
   Controls,
+  type Connection,
   type Edge,
+  type NodeChange,
   type OnNodeDrag,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import Sidebar from "@/components/Sidebar";
 import QAMapCard, { type QaMapRFNode } from "@/components/qa-map/QAMapCard";
+import RelEdge from "@/components/qa-map/RelEdge";
 import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
 import { DND_MIME, readDnd } from "@/lib/dnd";
 import {
@@ -30,6 +33,7 @@ import {
 import type { Source } from "@/lib/types";
 
 const nodeTypes = { qaCard: QAMapCard };
+const edgeTypes = { relEdge: RelEdge };
 
 type MapTab = {
   key: string;
@@ -64,6 +68,7 @@ export default function SolvePage() {
   const [contextIds, setContextIds] = useState<Set<number>>(new Set());
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [dropOver, setDropOver] = useState(false);
+  const [selectedEdge, setSelectedEdge] = useState<{ nodeId: string; relation: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -174,10 +179,15 @@ export default function SolvePage() {
 
   const onResize = useCallback(
     (id: string, w: number, h: number) => {
-      patchActive({ nodes: active.nodes.map((n) => (n.id === id ? { ...n, w, h } : n)) });
+      // 拖动过程中只改本地状态不落库，拖完 onResizeEnd 统一保存
+      patchActive({ nodes: active.nodes.map((n) => (n.id === id ? { ...n, w, h } : n)) }, false);
     },
     [active, patchActive]
   );
+
+  const onResizeEnd = useCallback(() => {
+    patchActive({});
+  }, [patchActive]);
 
   const onDelete = useCallback(
     (node: QaMapNode) => {
@@ -188,6 +198,70 @@ export default function SolvePage() {
     },
     [active, patchActive]
   );
+
+  // ── 受控拖动：实时同步节点位置（不落库），拖完 onNodeDragStop 保存。
+  //    不接 onNodesChange 会在拖动/缩放时状态冲突导致卡片消失（历史 bug） ──
+  const onNodesChange = useCallback(
+    (changes: NodeChange<QaMapRFNode>[]) => {
+      setTabs((prev) =>
+        prev.map((t) => {
+          if (t.key !== activeKey) return t;
+          let next = t.nodes;
+          for (const c of changes) {
+            if (c.type === "position" && c.position) {
+              next = next.map((n) => (n.id === c.id ? { ...n, x: c.position!.x, y: c.position!.y } : n));
+            }
+          }
+          return next === t.nodes ? t : { ...t, nodes: next };
+        })
+      );
+    },
+    [activeKey]
+  );
+
+  // ── 自定义连线：拖右侧锚点到另一张卡 → 建立父子关系（防环） ──
+  const onConnect = useCallback(
+    (conn: Connection) => {
+      if (!conn.source || !conn.target || conn.source === conn.target) return;
+      const isAncestor = (maybeAncestor: string, nodeId: string): boolean => {
+        let cur = active.nodes.find((n) => n.id === nodeId);
+        while (cur?.parentId) {
+          if (cur.parentId === maybeAncestor) return true;
+          cur = active.nodes.find((n) => n.id === cur!.parentId);
+        }
+        return false;
+      };
+      if (isAncestor(conn.target, conn.source)) {
+        setError("不能连回自己的上游（会成环）");
+        return;
+      }
+      patchActive({
+        nodes: active.nodes.map((n) =>
+          n.id === conn.target ? { ...n, parentId: conn.source, relation: n.relation ?? "追问" } : n
+        ),
+      });
+    },
+    [active, patchActive]
+  );
+
+  // ── 点边：改关系词 / 断开 ──
+  const applyEdgeRelation = useCallback(() => {
+    if (!selectedEdge) return;
+    patchActive({
+      nodes: active.nodes.map((n) =>
+        n.id === selectedEdge.nodeId ? { ...n, relation: selectedEdge.relation.trim().slice(0, 10) || "追问" } : n
+      ),
+    });
+    setSelectedEdge(null);
+  }, [active, patchActive, selectedEdge]);
+
+  const disconnectEdge = useCallback(() => {
+    if (!selectedEdge) return;
+    patchActive({
+      nodes: active.nodes.map((n) => (n.id === selectedEdge.nodeId ? { ...n, parentId: null, relation: undefined } : n)),
+    });
+    setSelectedEdge(null);
+  }, [active, patchActive, selectedEdge]);
 
   const onNodeDragStop: OnNodeDrag<QaMapRFNode> = useCallback(
     (_e, rfNode) => {
@@ -304,10 +378,11 @@ export default function SolvePage() {
           onCite,
           onDelete,
           onResize,
+          onResizeEnd,
           busy: busyKey === active?.key,
         },
       })),
-    [active, busyKey, onFollowUp, onCite, onDelete, onResize]
+    [active, busyKey, onFollowUp, onCite, onDelete, onResize, onResizeEnd]
   );
 
   const rfEdges = useMemo<Edge[]>(
@@ -318,14 +393,11 @@ export default function SolvePage() {
           id: `${n.parentId}-${n.id}`,
           source: n.parentId!,
           target: n.id,
-          type: "smoothstep",
-          label: "追问",
-          labelStyle: { fontSize: 9, fill: "#a3a3a3" },
-          labelBgPadding: [3, 1],
-          labelBgBorderRadius: 2,
-          labelBgStyle: { fill: "#fff", fillOpacity: 0.9 },
+          type: "relEdge",
+          data: { relation: n.relation ?? "追问" },
+          selected: selectedEdge?.nodeId === n.id,
         })),
-    [active]
+    [active, selectedEdge]
   );
 
   const ready = sources.filter((s) => s.status === "ready");
@@ -505,18 +577,49 @@ export default function SolvePage() {
                 nodes={rfNodes}
                 edges={rfEdges}
                 nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                onNodesChange={onNodesChange}
+                onConnect={onConnect}
+                onEdgeClick={(_e, edge) => {
+                  const child = active.nodes.find((n) => `${n.parentId}-${n.id}` === edge.id);
+                  if (child) setSelectedEdge({ nodeId: child.id, relation: child.relation ?? "追问" });
+                }}
                 onNodeDragStop={onNodeDragStop}
                 onNodeClick={(_e, n) => patchActive({ selectedId: n.id }, false)}
-                onPaneClick={() => patchActive({ selectedId: null }, false)}
+                onPaneClick={() => {
+                  patchActive({ selectedId: null }, false);
+                  setSelectedEdge(null);
+                }}
                 fitView
                 minZoom={0.1}
                 nodesDraggable
-                nodesConnectable={false}
+                nodesConnectable
                 edgesFocusable={false}
               >
                 <Background gap={20} size={1} color="#ececec" />
                 <Controls showInteractive={false} />
               </ReactFlow>
+            )}
+
+            {/* 边编辑：改关系词 / 断开连线 */}
+            {selectedEdge && (
+              <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-lg border border-neutral-300 bg-white px-3 py-2 shadow-lg">
+                <span className="text-[11px] text-neutral-500">连线关系</span>
+                <input
+                  value={selectedEdge.relation}
+                  onChange={(e) => setSelectedEdge({ ...selectedEdge, relation: e.target.value })}
+                  onKeyDown={(e) => e.key === "Enter" && applyEdgeRelation()}
+                  className="w-24 rounded border border-neutral-200 px-2 py-1 text-[11px] outline-none focus:border-neutral-400"
+                  placeholder="如：追问 / 延伸 / 对比"
+                />
+                <button onClick={applyEdgeRelation} className="rounded border border-neutral-900 bg-neutral-900 px-2 py-1 text-[10px] text-white hover:bg-neutral-700">
+                  应用
+                </button>
+                <button onClick={disconnectEdge} className="rounded border border-neutral-200 px-2 py-1 text-[10px] text-neutral-500 hover:border-red-300 hover:text-red-600">
+                  断开
+                </button>
+                <button onClick={() => setSelectedEdge(null)} className="px-1 text-[11px] text-neutral-300 hover:text-neutral-700">×</button>
+              </div>
             )}
 
             {/* 底部对话框（悬浮，可拖入资源） */}

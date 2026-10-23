@@ -28,6 +28,8 @@ export type QaMapNode = {
   /** 卡片尺寸（可拖边框调整） */
   w?: number;
   h?: number;
+  /** 与父连线的关系关键词（可自定义，默认「追问」） */
+  relation?: string;
 };
 
 export type QaMapData = {
@@ -96,6 +98,7 @@ export function normalizeQaMap(raw: unknown): QaMapData | null {
       y: Number.isFinite(Number(n.y)) ? Number(n.y) : 60,
       w: Number.isFinite(Number(n.w)) ? Number(n.w) : 340,
       h: Number.isFinite(Number(n.h)) ? Number(n.h) : 280,
+      relation: typeof n.relation === "string" && n.relation.trim() ? n.relation.trim().slice(0, 10) : undefined,
     });
   }
   // 父指向不存在的节点 → 提升为根，防图断裂

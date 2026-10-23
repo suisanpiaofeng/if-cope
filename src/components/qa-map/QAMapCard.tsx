@@ -12,6 +12,7 @@ export type QaMapCardData = {
   onCite: (sourceId: number) => void;
   onDelete: (node: QaMapNode) => void;
   onResize: (id: string, w: number, h: number) => void;
+  onResizeEnd?: (id: string) => void;
   busy?: boolean;
 };
 
@@ -40,6 +41,7 @@ export default function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
       );
     }
     function up() {
+      if (resizeRef.current) data.onResizeEnd?.(n.id);
       resizeRef.current = null;
       document.body.style.cursor = "";
     }
