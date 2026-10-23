@@ -1,10 +1,10 @@
 "use client";
 
 /** 知识地图卡片：一次问答 = 一张卡；可拖边框调大小、从当前节点追问、引用跳右侧预览 */
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Markdown } from "@/components/Markdown";
-import type { QaMapNode } from "@/lib/qaMapTypes";
+import type { QaMapCite, QaMapNode } from "@/lib/qaMapTypes";
 
 export type QaMapCardData = {
   node: QaMapNode;
@@ -61,6 +61,28 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
     data.onFollowUp(n.id, q);
   }
 
+  // 按文件合并引用（同一文件多个分块会重复出现；页码聚合，兼容历史数据）
+  const mergedCites = useMemo(() => {
+    const groups = new Map<number, { c: QaMapCite; pages: number[] }>();
+    for (const c of n.citations ?? []) {
+      const g = groups.get(c.sourceId);
+      if (!g) groups.set(c.sourceId, { c, pages: c.page != null ? [c.page] : [] });
+      else if (c.page != null && !g.pages.includes(c.page)) g.pages.push(c.page);
+    }
+    return [...groups.values()].map(({ c, pages }) => ({
+      ...c,
+      pageLabel:
+        pages.length === 0
+          ? ""
+          : pages.length <= 2
+            ? pages
+                .sort((a, b) => a - b)
+                .map((p) => `p${p}`)
+                .join(" ")
+            : `p${Math.min(...pages)}+${pages.length - 1}页`,
+    }));
+  }, [n.citations]);
+
   return (
     <div
       className={`group relative rounded-lg border bg-white shadow-sm transition-shadow ${
@@ -90,20 +112,20 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
           </div>
         </div>
 
-        {/* 引用（仅真正被回答标注过的；没有就不显示） */}
-        {(n.citations?.length ?? 0) > 0 && (
+        {/* 引用（按文件合并去重；仅真正被回答标注过的；没有就不显示） */}
+        {mergedCites.length > 0 && (
           <div className="flex flex-wrap gap-1 border-t border-neutral-100 px-3 py-1.5">
-            {n.citations!.map((c) => (
+            {mergedCites.map((c) => (
               <button
-                key={c.n}
+                key={c.sourceId}
                 onClick={(e) => {
                   e.stopPropagation();
                   data.onCite(c.sourceId);
                 }}
-                title={`${c.title}${c.page != null ? ` 第${c.page}页` : ""}${c.quote ? `\n"${c.quote}"` : ""}（在右侧预览）`}
+                title={`${c.title}${c.pageLabel ? ` ${c.pageLabel}` : ""}${c.quote ? `\n"${c.quote}"` : ""}（在右侧预览）`}
                 className="nodrag rounded-sm border border-neutral-200 bg-neutral-50 px-1.5 py-px text-[9px] text-neutral-500 hover:border-neutral-400 hover:text-neutral-900"
               >
-                📎 {c.title.slice(0, 8)}{c.page != null ? ` p${c.page}` : ""}
+                📎 {c.title.slice(0, 8)}{c.pageLabel ? ` ${c.pageLabel}` : ""}
               </button>
             ))}
           </div>

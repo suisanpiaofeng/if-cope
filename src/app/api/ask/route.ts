@@ -161,7 +161,16 @@ export async function POST(req: NextRequest) {
     const used = new Set(
       [...answer.matchAll(/\[(\d{1,2})\]/g)].map((m) => Number(m[1]))
     );
-    const citations = allCites.filter((c) => used.has(c.n));
+    const cited = allCites.filter((c) => used.has(c.n));
+    // 按文件（sourceId）去重：同一文件多个分块只留排名最高的一个，
+    // 避免卡片下相同文件的引用芯片排排坐（显示层另有合并兑底，兼容历史数据）
+    const seenSources = new Set<number>();
+    const citations: QaMapCite[] = [];
+    for (const c of cited) {
+      if (seenSources.has(c.sourceId)) continue;
+      seenSources.add(c.sourceId);
+      citations.push(c);
+    }
 
     // ── 节点落图 ──
     const pos = nextNodePosition(map?.nodes ?? [], parentId);
