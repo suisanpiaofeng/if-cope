@@ -23,6 +23,7 @@ export default function Workspace() {
   const [genError, setGenError] = useState<string | null>(null);
   const [generatingNote, setGeneratingNote] = useState<string | null>(null);
   const [organizing, setOrganizing] = useState(false);
+  const [organizeMsg, setOrganizeMsg] = useState<string | null>(null);
   const [configured, setConfigured] = useState<boolean | null>(null);
   // 可拖动的分栏宽度
   const [filesW, setFilesW] = useState(264);
@@ -291,6 +292,11 @@ export default function Workspace() {
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "整理失败");
       await load();
+      const parts = [`移动 ${d.moved ?? 0} 份`, `复用已有类目 ${d.reused ?? 0} 个`];
+      if (d.created?.length) parts.push(`新建 ${d.created.length} 个（${d.created.join("、")}）`);
+      if (d.cleaned?.length) parts.push(`清理空类目 ${d.cleaned.length} 个（${d.cleaned.join("、")}）`);
+      setOrganizeMsg(`整理完成：${parts.join(" · ")}`);
+      setTimeout(() => setOrganizeMsg(null), 12000);
     } catch (e) {
       setGenError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -359,6 +365,7 @@ export default function Workspace() {
           generatingNote={generatingNote}
           onOrganize={organizeResources}
           organizing={organizing}
+          organizeMsg={organizeMsg}
         />
       </div>
     </div>

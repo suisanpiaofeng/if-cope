@@ -51,7 +51,7 @@ function mapMsgs(data: { messages?: { role: string; content: string; citations: 
 
 /** 最右对话栏：主界面（最近 3 条）↔ 对话视图 ↔ 全部对话；回答进行中回退不中断 */
 export default function ChatPanel({
-  sources, selected, onSelectionReset, onGenerateNote, generatingNote, onOrganize, organizing,
+  sources, selected, onSelectionReset, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg,
 }: {
   sources: Source[];
   /** 已勾选的资源（来自文件栏复选框） */
@@ -65,6 +65,8 @@ export default function ChatPanel({
   /** 快捷功能：自动整理资源（AI 归类） */
   onOrganize?: () => void;
   organizing?: boolean;
+  /** 整理结果回执（短暂展示） */
+  organizeMsg?: string | null;
 }) {
   const ready = sources.filter((s) => s.status === "ready");
   // 拖入对话框的文件（与勾选取并集作为上下文）
@@ -277,6 +279,11 @@ export default function ChatPanel({
         <div className="mx-4 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
       )}
       {quickBar}
+      {organizeMsg && (
+        <div className="mx-4 mb-1 border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] text-emerald-700">
+          {organizeMsg}
+        </div>
+      )}
       <div className="border-t border-neutral-100 px-4 py-3"
         onDragOver={(e) => { if (e.dataTransfer.types.includes(DND_MIME)) { e.preventDefault(); setDropOver(true); } }}
         onDragLeave={() => setDropOver(false)}
