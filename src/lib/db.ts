@@ -215,4 +215,24 @@ export function recordUsage(
   );
 }
 
+/** 嵌入维度元数据自愈：以存量向量的实际维度为准校准设置。
+ *  历史背景：bge-small-zh 实为 512 维，早期配置误记 384（与 bge-small-en 混淆）；
+ *  检索本身以向量为准一直自洽，但换模型/重建索引时的维度校验会拿错误元数据误判，故在此校准。 */
+const dimRow = db.prepare("SELECT embedding FROM chunks LIMIT 1").get() as { embedding: string } | undefined;
+if (dimRow) {
+  try {
+    const actual = (JSON.parse(dimRow.embedding) as number[]).length;
+    const raw = db.prepare("SELECT value FROM settings WHERE key = 'model'").get() as { value: string } | undefined;
+    if (raw) {
+      const cfg = JSON.parse(raw.value) as { embeddingDimension?: number };
+      if (actual > 0 && cfg.embeddingDimension !== actual) {
+        cfg.embeddingDimension = actual;
+        db.prepare("UPDATE settings SET value = ? WHERE key = 'model'").run(JSON.stringify(cfg));
+      }
+    }
+  } catch {
+    /* 元数据校准失败不影响启动，仅失去一次自愈机会 */
+  }
+}
+
 export default db;

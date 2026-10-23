@@ -2,14 +2,15 @@ import path from "path";
 
 /** 本地嵌入模型（免配置默认方案）：
  *  fastembed（Qdrant 出品，ONNX Runtime CPU 推理）
- *  模型：BAAI/bge-small-zh-v1.5 —— 中文检索榜常客，约 100MB，384 维
+ *  模型：BAAI/bge-small-zh-v1.5 —— 中文检索榜常客，约 100MB，512 维
+ *  （注意：bge-small-<u>zh</u> 是 512 维，384 维的是 bge-small-en）
  *  首次调用自动下载到 data/models/，之后离线可用。 */
 
 // 必须在 import fastembed 之前设置：其内部在模块加载时读取 HF_ENDPOINT
 if (!process.env.HF_ENDPOINT) process.env.HF_ENDPOINT = "https://hf-mirror.com";
 
 export const LOCAL_EMBED_MODEL = "bge-small-zh-v1.5";
-export const LOCAL_EMBED_DIM = 384;
+export const LOCAL_EMBED_DIM = 512;
 
 type FlagEmbedding = import("fastembed").FlagEmbedding;
 
