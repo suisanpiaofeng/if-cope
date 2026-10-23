@@ -526,11 +526,13 @@ function PdfCompare({ sourceId, artifactId }: { sourceId: number; artifactId: nu
       <div className="mb-2 flex items-center gap-3 text-[11px] text-neutral-500">
         <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-neutral-400" />原文（原版排版）</span>
         <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />中文双语对照（保留原版排版）</span>
-        <span className="ml-auto text-neutral-400">两页均为完整 PDF · 页码与原版一一对应，可各自滚动/缩放对照</span>
+        <span className="ml-auto text-neutral-400">两页均为完整 PDF，可各自滚动/缩放对照阅读</span>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
-        <iframe src={`/api/preview/${sourceId}`} title="原文 PDF" className="min-h-0 w-full border border-neutral-300" />
-        <iframe src={`/api/translations/${artifactId}?which=dual`} title="双语 PDF" className="min-h-0 w-full border border-neutral-300" />
+        {/* iframe 必须显式 h-full：UA 默认 height:150px 会阻断 grid 拉伸，
+            极端扁视口会让 PDFium 算出分数缩放把文字栅格切碎（显示错乱的根因） */}
+        <iframe src={`/api/preview/${sourceId}`} title="原文 PDF" className="h-full min-h-0 w-full border border-neutral-300" />
+        <iframe src={`/api/translations/${artifactId}?which=dual`} title="双语 PDF" className="h-full min-h-0 w-full border border-neutral-300" />
       </div>
     </div>
   );
