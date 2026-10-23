@@ -16,8 +16,9 @@ export default function EdgesOverlay({
   onEdgeClick,
 }: {
   nodes: QaMapNode[];
+  /** 当前选中：哪条线的哪一端（两端关系词独立编辑） */
   selectedEdgeId?: string | null;
-  onEdgeClick?: (childId: string) => void;
+  onEdgeClick?: (childId: string, end: "parent" | "child") => void;
 }) {
   const { x, y, zoom } = useViewport();
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -52,33 +53,39 @@ export default function EdgesOverlay({
         })}
       </svg>
 
-      {/* 两端关系徽标（点击编辑） */}
+      {/* 两端各自的关系词徽标（点哪端编辑哪端）：父端=子卡相对父，子端=父相对子卡 */}
       {edges.map((n) => {
         const p = byId.get(n.parentId!)!;
         const a = toScreen(p.x + CARD_W(p), p.y + CARD_H(p) / 2);
         const b = toScreen(n.x, n.y + CARD_H(n) / 2);
-        const rel = n.relation || "追问";
-        const badge = (sx: number, sy: number, key: string) => (
-          <button
-            key={key}
-            onClick={(e) => {
-              e.stopPropagation();
-              onEdgeClick?.(n.id);
-            }}
-            style={{ position: "absolute", left: sx, top: sy, transform: "translate(-50%, -50%)" }}
-            className={`pointer-events-auto rounded-sm border px-1.5 py-0.5 text-[10px] leading-3 shadow-sm transition-colors ${
-              selectedEdgeId === n.id
-                ? "border-neutral-900 bg-neutral-900 text-white"
-                : "border-neutral-200 bg-white text-neutral-500 hover:border-neutral-400 hover:text-neutral-900"
-            }`}
-            title="点击修改这条连线的关系词"
-          >
-            {rel}
-          </button>
-        );
+        const relParent = n.relParentEnd ?? n.relation ?? "追问";
+        const relChild = n.relChildEnd ?? "上文依据";
+        const badge = (sx: number, sy: number, end: "parent" | "child", label: string, key: string) => {
+          const isSel = selectedEdgeId === n.id;
+          return (
+            <button
+              key={key}
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdgeClick?.(n.id, end);
+              }}
+              style={{ position: "absolute", left: sx, top: sy, transform: "translate(-50%, -50%)" }}
+              className={`pointer-events-auto rounded-sm border px-1.5 py-0.5 text-[10px] leading-3 shadow-sm transition-colors ${
+                isSel
+                  ? "border-neutral-900 bg-neutral-900 text-white"
+                  : end === "parent"
+                    ? "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-500 hover:text-neutral-900"
+                    : "border-neutral-300 bg-neutral-50 text-neutral-500 hover:border-neutral-500 hover:text-neutral-900"
+              }`}
+              title={`${end === "parent" ? "子卡相对父卡" : "父卡相对子卡"}的关系词（点击修改）`}
+            >
+              {label}
+            </button>
+          );
+        };
         return [
-          badge(a.sx + (b.sx - a.sx) * 0.2, a.sy + (b.sy - a.sy) * 0.2, `${n.id}-s`),
-          badge(a.sx + (b.sx - a.sx) * 0.8, a.sy + (b.sy - a.sy) * 0.8, `${n.id}-t`),
+          badge(a.sx + (b.sx - a.sx) * 0.2, a.sy + (b.sy - a.sy) * 0.2, "parent", relParent, `${n.id}-p`),
+          badge(a.sx + (b.sx - a.sx) * 0.8, a.sy + (b.sy - a.sy) * 0.8, "child", relChild, `${n.id}-c`),
         ];
       })}
     </div>

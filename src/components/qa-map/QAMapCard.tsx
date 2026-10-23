@@ -1,7 +1,7 @@
 "use client";
 
 /** 知识地图卡片：一次问答 = 一张卡；可拖边框调大小、从当前节点追问、引用跳右侧预览 */
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Markdown } from "@/components/Markdown";
 import type { QaMapNode } from "@/lib/qaMapTypes";
@@ -23,7 +23,7 @@ const MAX_W = 720;
 const MIN_H = 180;
 const MAX_H = 900;
 
-export default function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
+function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
   const n = data.node;
   const [asking, setAsking] = useState(false);
   const [text, setText] = useState("");
@@ -66,7 +66,7 @@ export default function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
       className={`group relative rounded-lg border bg-white shadow-sm transition-shadow ${
         selected ? "border-neutral-900 shadow-md ring-1 ring-neutral-900" : "border-neutral-200"
       }`}
-      style={{ width: n.w ?? 340, height: n.h ?? 280 }}
+      style={{ width: n.w ?? 340, height: n.h ?? 280, contain: "layout" }}
     >
       {/* 连接锚点（React Flow 边的挂点） */}
       <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !rounded-full !border-2 !border-white !bg-neutral-400" />
@@ -186,3 +186,5 @@ export default function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
     </div>
   );
 }
+
+export default memo(QAMapCard);

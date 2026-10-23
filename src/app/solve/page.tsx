@@ -67,7 +67,11 @@ export default function SolvePage() {
   const [contextIds, setContextIds] = useState<Set<number>>(new Set());
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [dropOver, setDropOver] = useState(false);
-  const [selectedEdge, setSelectedEdge] = useState<{ nodeId: string; relation: string } | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<{
+    childId: string;
+    end: "parent" | "child";
+    draft: string;
+  } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -165,38 +169,44 @@ export default function SolvePage() {
     }
   }
 
-  // ── 卡片操作 ──
-  const onFollowUp = useCallback((parentId: string, question: string) => void ask(question, parentId), [ask, active, contextIds, image]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── 卡片操作：全部经 ref 读取最新状态 → 回调引用恒定 →
+  //    卡片 data 对象不随每次拖动重造 → 消除整树重渲染（闪烁根治） ──
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  const patchActiveRef = useRef(patchActive);
+  patchActiveRef.current = patchActive;
+  const sourcesRef = useRef(sources);
+  sourcesRef.current = sources;
 
-  const onCite = useCallback(
-    (sourceId: number) => {
-      const s = sources.find((x) => x.id === sourceId);
-      if (s) setPreviewSource(s);
-    },
-    [sources]
-  );
+  const onFollowUp = useCallback((parentId: string, question: string) => {
+    void askRef.current(question, parentId);
+  }, []);
 
-  const onResize = useCallback(
-    (id: string, w: number, h: number) => {
-      // 拖动过程中只改本地状态不落库，拖完 onResizeEnd 统一保存
-      patchActive({ nodes: active.nodes.map((n) => (n.id === id ? { ...n, w, h } : n)) }, false);
-    },
-    [active, patchActive]
-  );
+  const onCite = useCallback((sourceId: number) => {
+    const s = sourcesRef.current.find((x) => x.id === sourceId);
+    if (s) setPreviewSource(s);
+  }, []);
+
+  const onResize = useCallback((id: string, w: number, h: number) => {
+    // 拖动过程中只改本地状态不落库，拖完 onResizeEnd 统一保存
+    const a = activeRef.current;
+    patchActiveRef.current({ nodes: (a?.nodes ?? []).map((n) => (n.id === id ? { ...n, w, h } : n)) }, false);
+  }, []);
 
   const onResizeEnd = useCallback(() => {
-    patchActive({});
-  }, [patchActive]);
+    patchActiveRef.current({});
+  }, []);
 
-  const onDelete = useCallback(
-    (node: QaMapNode) => {
-      const next = active.nodes
-        .filter((n) => n.id !== node.id)
-        .map((n) => (n.parentId === node.id ? { ...n, parentId: node.parentId } : n));
-      patchActive({ nodes: next, selectedId: null });
-    },
-    [active, patchActive]
-  );
+  const onDelete = useCallback((node: QaMapNode) => {
+    const a = activeRef.current;
+    if (!a) return;
+    const next = a.nodes
+      .filter((n) => n.id !== node.id)
+      .map((n) => (n.parentId === node.id ? { ...n, parentId: node.parentId } : n));
+    patchActiveRef.current({ nodes: next, selectedId: null });
+  }, []);
 
   // ── 受控节点：只应用拖动 position（实时跟手，不落库）。
   //    不接 onNodesChange 拖动会让卡片消失（历史 bug）；
@@ -251,13 +261,18 @@ export default function SolvePage() {
     [active, patchActive]
   );
 
-  // ── 点边：改关系词 / 断开 ──
+  // ── 点边端：两端关系词独立编辑（点哪端改哪端）/ 断开 ──
   const applyEdgeRelation = useCallback(() => {
     if (!selectedEdge) return;
+    const { childId, end, draft } = selectedEdge;
+    const value = draft.trim().slice(0, 10);
     patchActive({
-      nodes: active.nodes.map((n) =>
-        n.id === selectedEdge.nodeId ? { ...n, relation: selectedEdge.relation.trim().slice(0, 10) || "追问" } : n
-      ),
+      nodes: active.nodes.map((n) => {
+        if (n.id !== childId) return n;
+        return end === "parent"
+          ? { ...n, relParentEnd: value || "追问" }
+          : { ...n, relChildEnd: value || "上文依据" };
+      }),
     });
     setSelectedEdge(null);
   }, [active, patchActive, selectedEdge]);
@@ -265,7 +280,11 @@ export default function SolvePage() {
   const disconnectEdge = useCallback(() => {
     if (!selectedEdge) return;
     patchActive({
-      nodes: active.nodes.map((n) => (n.id === selectedEdge.nodeId ? { ...n, parentId: null, relation: undefined } : n)),
+      nodes: active.nodes.map((n) =>
+        n.id === selectedEdge.childId
+          ? { ...n, parentId: null, relation: undefined, relParentEnd: undefined, relChildEnd: undefined }
+          : n
+      ),
     });
     setSelectedEdge(null);
   }, [active, patchActive, selectedEdge]);
@@ -371,26 +390,38 @@ export default function SolvePage() {
     URL.revokeObjectURL(a.href);
   }
 
-  // ── React Flow 数据 ──
-  const rfNodes = useMemo<QaMapRFNode[]>(
-    () =>
-      (active?.nodes ?? []).map((n) => ({
+  // ── React Flow 数据：对象复用缓存 —— 仅被操作的卡片产生新对象/新 data，
+  //    其余节点引用不变 → RF 的 store selector 浅比较跳过 → 拖动/缩放零重渲染（闪烁根治） ──
+  const cardHandlers = useMemo(
+    () => ({ onFollowUp, onCite, onDelete, onResize, onResizeEnd }),
+    [onFollowUp, onCite, onDelete, onResize, onResizeEnd]
+  );
+  const nodeCacheRef = useRef(new Map<string, QaMapRFNode>());
+  const rfNodes = useMemo<QaMapRFNode[]>(() => {
+    const a = active;
+    const cache = nodeCacheRef.current;
+    const keep = new Set<string>();
+    const list = (a?.nodes ?? []).map((n) => {
+      keep.add(n.id);
+      const busy = busyKey === a?.key;
+      const selected = n.id === a?.selectedId;
+      const prev = cache.get(n.id);
+      if (prev && prev.position.x === n.x && prev.position.y === n.y && prev.selected === selected && prev.data.node === n && prev.data.busy === busy) {
+        return prev;
+      }
+      const next: QaMapRFNode = {
         id: n.id,
         type: "qaCard",
         position: { x: n.x, y: n.y },
-        selected: n.id === active?.selectedId,
-        data: {
-          node: n,
-          onFollowUp,
-          onCite,
-          onDelete,
-          onResize,
-          onResizeEnd,
-          busy: busyKey === active?.key,
-        },
-      })),
-    [active, busyKey, onFollowUp, onCite, onDelete, onResize, onResizeEnd]
-  );
+        selected,
+        data: { node: n, ...cardHandlers, busy },
+      };
+      cache.set(n.id, next);
+      return next;
+    });
+    for (const key of [...cache.keys()]) if (!keep.has(key)) cache.delete(key);
+    return list;
+  }, [active, busyKey, cardHandlers]);
 
   const ready = sources.filter((s) => s.status === "ready");
   const attachNode = active?.selectedId ? active.nodes.find((n) => n.id === active.selectedId) : null;
@@ -634,10 +665,18 @@ export default function SolvePage() {
                 {/* 连线层：自绘 SVG（RF 边管道不可靠，自绘稳定且可交互） */}
                 <EdgesOverlay
                   nodes={active?.nodes ?? []}
-                  selectedEdgeId={selectedEdge?.nodeId}
-                  onEdgeClick={(childId) => {
+                  selectedEdgeId={selectedEdge?.childId}
+                  onEdgeClick={(childId, end) => {
                     const child = active.nodes.find((n) => n.id === childId);
-                    if (child) setSelectedEdge({ nodeId: child.id, relation: child.relation ?? "追问" });
+                    if (!child) return;
+                    setSelectedEdge({
+                      childId,
+                      end,
+                      draft:
+                        end === "parent"
+                          ? (child.relParentEnd ?? child.relation ?? "追问")
+                          : (child.relChildEnd ?? "上文依据"),
+                    });
                   }}
                 />
               </ReactFlow>
@@ -646,13 +685,16 @@ export default function SolvePage() {
             {/* 边编辑：改关系词 / 断开连线 */}
             {selectedEdge && (
               <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-lg border border-neutral-300 bg-white px-3 py-2 shadow-lg">
-                <span className="text-[11px] text-neutral-500">连线关系</span>
+                <span className="text-[11px] text-neutral-500">
+                  {selectedEdge.end === "parent" ? "父端标签 · 子卡相对父" : "子端标签 · 父卡相对子"}
+                </span>
                 <input
-                  value={selectedEdge.relation}
-                  onChange={(e) => setSelectedEdge({ ...selectedEdge, relation: e.target.value })}
+                  value={selectedEdge.draft}
+                  onChange={(e) => setSelectedEdge({ ...selectedEdge, draft: e.target.value })}
                   onKeyDown={(e) => e.key === "Enter" && applyEdgeRelation()}
-                  className="w-24 rounded border border-neutral-200 px-2 py-1 text-[11px] outline-none focus:border-neutral-400"
-                  placeholder="如：追问 / 延伸 / 对比"
+                  className="w-28 rounded border border-neutral-200 px-2 py-1 text-[11px] outline-none focus:border-neutral-400"
+                  placeholder="2-6 字关系词"
+                  autoFocus
                 />
                 <button onClick={applyEdgeRelation} className="rounded border border-neutral-900 bg-neutral-900 px-2 py-1 text-[10px] text-white hover:bg-neutral-700">
                   应用

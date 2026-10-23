@@ -34,6 +34,12 @@ const ROUTER_SYSTEM = `你是知识地图的路由判断器。给定学生的新
 - 全新的独立话题 → 返回 null
 只输出 JSON：{"parentId":"卡片id或null"}，不要输出其他文字。判断依据是问题内容的语义关联，选最相关的一张；拿不准就 null。`;
 
+const REL_SYSTEM = `你是知识地图的关系标注器。给定相连的两张问答卡片，分别总结两个方向的关系词：
+- parentEnd：子卡相对父卡的关系（如：追问延伸、深入拆解、案例验证、对比辨析、应用实践、纠错反思）
+- childEnd：父卡相对子卡的关系（如：上文依据、背景来源、概念出处、前情结论、方法出处）
+要求：2-6 个字的中文词，基于两问语义给出比“追问”更具体的词；拿不准时才用通用词。
+只输出 JSON：{"parentEnd":"...","childEnd":"..."}`;
+
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as {
     question?: string;
@@ -75,6 +81,16 @@ export async function POST(req: NextRequest) {
 
     // ── 追问链上下文 ──
     const chain = map ? ancestorChain(map.nodes, parentId ?? null) : [];
+
+    // ── 两端关系词：AI 总结（失败/未配模型回退默认，不阻塞主流程） ──
+    let relParentEnd: string | undefined;
+    let relChildEnd: string | undefined;
+    if (parentId) {
+      const parentQ = chain[chain.length - 1]?.question ?? "";
+      const labels = await describeRelation(parentQ, q || "（图片提问）");
+      relParentEnd = labels.parentEnd;
+      relChildEnd = labels.childEnd;
+    }
 
     // ── 检索资料（指定资源优先；否则全部可用） ──
     const readyIds = (db.prepare("SELECT id FROM sources WHERE status = 'ready'").all() as { id: number }[]).map(
@@ -162,6 +178,8 @@ export async function POST(req: NextRequest) {
       w: 340,
       h: 280,
       relation: parentId ? "追问" : undefined,
+      relParentEnd,
+      relChildEnd,
     };
 
     let savedMapId = body.mapId ?? null;
@@ -217,6 +235,45 @@ async function decideParent(question: string, nodes: QaMapNode[]): Promise<strin
     return pid && nodes.some((n) => n.id === pid) ? pid : null;
   } catch {
     return null;
+  }
+}
+
+/** 两端关系词总结：为新连线生成语义化的方向标签（失败回退通用词） */
+async function describeRelation(
+  parentQ: string,
+  childQ: string
+): Promise<{ parentEnd: string; childEnd: string }> {
+  const FALLBACK = { parentEnd: "追问延伸", childEnd: "上文依据" };
+  const s = getSettings();
+  if (!isModelConfigured(s)) return FALLBACK;
+  try {
+    const res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
+      method: "POST",
+      headers: modelHeaders(s.apiKey),
+      body: JSON.stringify({
+        model: s.chatModel,
+        messages: [
+          { role: "system", content: REL_SYSTEM },
+          { role: "user", content: `父卡问题：${parentQ.slice(0, 120)}\n子卡问题：${childQ.slice(0, 120)}` },
+        ],
+        temperature: 0,
+        max_tokens: 300,
+      }),
+    });
+    if (!res.ok) return FALLBACK;
+    const data = (await res.json()) as {
+      choices: Array<{ message: { content?: string; reasoning_content?: string } }>;
+    };
+    const msg = data.choices?.[0]?.message;
+    const text = `${msg?.content ?? ""}\n${msg?.reasoning_content ?? ""}`;
+    const json = text.match(/\{[\s\S]*\}/)?.[0] ?? "";
+    const parsed = JSON.parse(json) as { parentEnd?: string; childEnd?: string };
+    return {
+      parentEnd: (parsed.parentEnd ?? "").trim().slice(0, 8) || FALLBACK.parentEnd,
+      childEnd: (parsed.childEnd ?? "").trim().slice(0, 8) || FALLBACK.childEnd,
+    };
+  } catch {
+    return FALLBACK;
   }
 }
 

@@ -28,8 +28,12 @@ export type QaMapNode = {
   /** 卡片尺寸（可拖边框调整） */
   w?: number;
   h?: number;
-  /** 与父连线的关系关键词（可自定义，默认「追问」） */
+  /** 与父连线的关系词（旧字段，兼容历史数据；现改为两端独立） */
   relation?: string;
+  /** 连线父端徽标：子卡相对父卡的关系（单独可编辑，生成时由 AI 总结） */
+  relParentEnd?: string;
+  /** 连线子端徽标：父卡相对子卡的关系（单独可编辑，生成时由 AI 总结） */
+  relChildEnd?: string;
 };
 
 export type QaMapData = {
@@ -99,6 +103,8 @@ export function normalizeQaMap(raw: unknown): QaMapData | null {
       w: Number.isFinite(Number(n.w)) ? Number(n.w) : 340,
       h: Number.isFinite(Number(n.h)) ? Number(n.h) : 280,
       relation: typeof n.relation === "string" && n.relation.trim() ? n.relation.trim().slice(0, 10) : undefined,
+      relParentEnd: typeof n.relParentEnd === "string" && n.relParentEnd.trim() ? n.relParentEnd.trim().slice(0, 10) : undefined,
+      relChildEnd: typeof n.relChildEnd === "string" && n.relChildEnd.trim() ? n.relChildEnd.trim().slice(0, 10) : undefined,
     });
   }
   // 父指向不存在的节点 → 提升为根，防图断裂
