@@ -13,6 +13,23 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   return NextResponse.json(row);
 }
 
+/** 更新产物内容（知识地图拖动/编辑后保存）：PUT { content, title? } */
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id } = await ctx.params;
+  const body = (await req.json()) as { content?: string; title?: string };
+  if (typeof body.content !== "string") {
+    return NextResponse.json({ error: "缺少 content" }, { status: 400 });
+  }
+  const row = db.prepare("SELECT id FROM artifacts WHERE id = ?").get(Number(id));
+  if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
+  if (body.title != null) {
+    db.prepare("UPDATE artifacts SET content = ?, title = ? WHERE id = ?").run(body.content, body.title.slice(0, 60), Number(id));
+  } else {
+    db.prepare("UPDATE artifacts SET content = ? WHERE id = ?").run(body.content, Number(id));
+  }
+  return NextResponse.json({ ok: true });
+}
+
 /** 移动成果到类目：PATCH { categoryId: number | null }（null = AIGC） */
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await ctx.params;

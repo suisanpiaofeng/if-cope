@@ -19,8 +19,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { categoryId, sourceIds, kind, artifactIds } = (await req.json()) as {
+  const { categoryId, sourceIds, kind, artifactIds, content: rawContent, title: rawTitle } = (await req.json()) as {
     categoryId?: number | null; sourceIds: number[]; kind?: string; artifactIds?: number[];
+    content?: string; title?: string;
   };
   // 所有产物默认落 AIGC 固定类目，用户可再拖拽分类
   const targetCategory = categoryId ?? getAigcCategoryId();
@@ -29,6 +30,17 @@ export async function POST(req: NextRequest) {
     if (!cat) return NextResponse.json({ error: "类目不存在" }, { status: 400 });
   }
   try {
+    // 直接落内容（知识地图卡片归档 / 导入笔记等）：不走模型
+    if (typeof rawContent === "string" && rawContent.trim()) {
+      const t = (rawTitle ?? "笔记").trim().slice(0, 60) || "笔记";
+      const info = db
+        .prepare(
+          "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .run(targetCategory, kind === "qa-map" ? "qa-map" : "note", t, rawContent, JSON.stringify(sourceIds ?? []), "user", Date.now());
+      const row = db.prepare("SELECT * FROM artifacts WHERE id = ?").get(Number(info.lastInsertRowid));
+      return NextResponse.json({ ...(row as object), source_ids: sourceIds ?? [] });
+    }
     // 便签引擎：kind 决定 prompt 契约与渲染器；未知类型当复习笔记处理
     const useKind = isNoteKind(kind) ? kind : "report";
     const { title, content, model } = await generateNote(sourceIds, useKind, artifactIds ?? []);

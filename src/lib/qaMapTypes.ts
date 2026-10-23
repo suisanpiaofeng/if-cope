@@ -1,0 +1,90 @@
+/**
+ * 知识地图（对话卡片地图）：类型 + 纯函数（客户端安全）。
+ * 每次问答 = 一张卡片；追问从某张卡长出新卡并连线，逐渐形成个人知识地图。
+ * 持久化为 artifacts（type=qa-map，content=QaMapData JSON）。
+ */
+
+export type QaMapCite = {
+  n: number;
+  sourceId: number;
+  title: string;
+  page: number | null;
+  quote: string;
+};
+
+export type QaMapNode = {
+  id: string;
+  parentId: string | null;
+  /** 第几轮（根提问=1，追问=父轮次+1） */
+  round: number;
+  /** 卡片标题（取问题的简短表述） */
+  title: string;
+  question: string;
+  /** markdown 回答 */
+  answer: string;
+  citations?: QaMapCite[];
+  x: number;
+  y: number;
+};
+
+export type QaMapData = {
+  title: string;
+  nodes: QaMapNode[];
+};
+
+/** 从某节点回溯祖先链（追问时带上文，保持对话连贯） */
+export function ancestorChain(nodes: QaMapNode[], nodeId: string | null): QaMapNode[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const chain: QaMapNode[] = [];
+  let cur = nodeId ? byId.get(nodeId) : undefined;
+  while (cur) {
+    chain.unshift(cur);
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  return chain;
+}
+
+/** 追问的新节点应放的位置：父卡片右下方，避开已有节点 */
+export function nextNodePosition(
+  nodes: QaMapNode[],
+  parentId: string | null
+): { x: number; y: number } {
+  const parent = parentId ? nodes.find((n) => n.id === parentId) : null;
+  const base = parent ?? nodes[nodes.length - 1];
+  if (!base) return { x: 80, y: 80 };
+  const siblings = nodes.filter((n) => n.parentId === parentId).length;
+  return {
+    x: parent ? parent.x + 380 : base.x + 380,
+    y: parent ? base.y + siblings * 320 - 80 : base.y,
+  };
+}
+
+/** 单张卡片 → markdown（归档到知识库用） */
+export function qaCardToMarkdown(node: QaMapNode): string {
+  const lines = [`# ${node.title}`, "", `**提问**：${node.question}`, "", node.answer, ""];
+  for (const c of node.citations ?? []) {
+    lines.push(`📎 出处：${c.title} #${c.sourceId}${c.page != null ? ` 第${c.page}页` : ""}${c.quote ? `（"${c.quote}"）` : ""}`);
+  }
+  return lines.join("\n");
+}
+
+/** 整张地图 → markdown（导出用） */
+export function qaMapToMarkdown(map: QaMapData): string {
+  const byParent = new Map<string | null, QaMapNode[]>();
+  for (const n of map.nodes) {
+    byParent.set(n.parentId, [...(byParent.get(n.parentId) ?? []), n]);
+  }
+  const lines: string[] = [`# ${map.title}`, ""];
+  const walk = (parent: string | null, depth: number) => {
+    for (const n of byParent.get(parent) ?? []) {
+      lines.push(`${"## ".repeat(Math.min(depth + 1, 3))}${n.title}`, "", `> ${n.question}`, "", n.answer, "");
+      for (const c of n.citations ?? []) {
+        lines.push(`📎 出处：${c.title} #${c.sourceId}${c.page != null ? ` 第${c.page}页` : ""}`);
+      }
+      lines.push("");
+      walk(n.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return lines.join("\n");
+}
