@@ -14,21 +14,13 @@ export default function Sidebar({ configured }: { configured: boolean | null }) 
         collapsed ? "w-[56px]" : "w-[120px]"
       }`}
     >
-      {collapsed ? (
-        <div className="flex justify-center pb-3 pt-4">
-          <CollapseBtn collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
-        </div>
-      ) : (
-        <div className="flex items-start justify-between px-4 pb-5 pt-4">
-          <div>
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-[15px] font-semibold tracking-tight">IF.Cope</span>
-            </div>
-            <span className="mt-1 inline-block rounded border border-neutral-200 px-1 py-px text-[10px] text-neutral-400">Demo</span>
-          </div>
-          <CollapseBtn collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
-        </div>
-      )}
+      {/* 头部：缩放按钮固定在左侧原地，收起时不位移；无 Demo 标 */}
+      <div className="flex items-center gap-1.5 px-2.5 pb-5 pt-4">
+        <CollapseBtn collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+        {!collapsed && (
+          <span className="text-[15px] font-semibold tracking-tight">IF.Cope</span>
+        )}
+      </div>
 
       <nav className={`flex-1 space-y-1 ${collapsed ? "px-2" : "px-2.5"}`}>
         <NavItem collapsed={collapsed} icon="grid" label="工作台" href="/" />

@@ -3,8 +3,6 @@ import path from "path";
 // 必须在 import @huggingface/transformers 之前设置（其在模块加载时读取）
 if (!process.env.HF_ENDPOINT) process.env.HF_ENDPOINT = "https://hf-mirror.com";
 
-import decodeAudio from "@audio/decode";
-
 /** 本地语音转写（STT）：whisper-tiny ONNX，CPU 推理，缓存于 data/models/。
  *  与本地嵌入同策略：免配置、走 hf-mirror、失败允许重试。
  *  STT_MODEL 环境变量可换更大模型（whisper-base/small）。 */
@@ -19,25 +17,27 @@ type AsrPipe = (
   audio: Float32Array,
   options?: Record<string, unknown>
 ) => Promise<{ text?: string }>;
+type AsrDisposable = AsrPipe & { dispose?: () => Promise<void> | void };
 
-let asrPromise: Promise<AsrPipe> | null = null;
-
-async function getAsr(): Promise<AsrPipe> {
-  if (!asrPromise) {
-    asrPromise = (async () => {
-      const { pipeline, env } = await import("@huggingface/transformers");
-      env.cacheDir = path.join(process.cwd(), "data", "models");
-      // 模型已预下载到本地（curl 绕过 Node 到 hf-mirror 的网络问题）；
-      // 本地优先加载，缺失时直接报错而非联网超时（报错含缺失文件路径）
-      env.localModelPath = path.join(process.cwd(), "data", "models");
-      env.allowRemoteModels = false;
-      const pipe = await pipeline("automatic-speech-recognition", STT_MODEL);
-      return pipe as unknown as AsrPipe;
-    })();
-    // 失败后清空缓存 promise，允许下次重试（如首次下载断网）
-    asrPromise.catch(() => { asrPromise = null; });
+/** 每次转写临时加载 whisper，用完立即释放：
+ *  模型 + ONNX 会话约 200-400MB，常驻太浪费；转写是偶发操作，重建 1-3s 可接受 */
+async function withAsr<T>(fn: (pipe: AsrPipe) => Promise<T>): Promise<T> {
+  const { pipeline, env } = await import("@huggingface/transformers");
+  env.cacheDir = path.join(process.cwd(), "data", "models");
+  // 模型已预下载到本地（curl 绕过 Node 到 hf-mirror 的网络问题）；
+  // 本地优先加载，缺失时直接报错而非联网超时（报错含缺失文件路径）
+  env.localModelPath = path.join(process.cwd(), "data", "models");
+  env.allowRemoteModels = false;
+  const pipe = (await pipeline("automatic-speech-recognition", STT_MODEL)) as unknown as AsrDisposable;
+  try {
+    return await fn(pipe);
+  } finally {
+    try {
+      await pipe.dispose?.();
+    } catch {
+      /* 释放失败不影响转写结果 */
+    }
   }
-  return asrPromise;
 }
 
 /** 线性插值重采样到 16kHz（whisper 输入要求） */
@@ -65,6 +65,7 @@ export type TranscribeResult = {
 
 /** 音频字节 → 转写文本。格式自动探测（mp3/m4a/wav/aac/flac/opus/webm…） */
 export async function transcribeAudio(buffer: Buffer): Promise<TranscribeResult> {
+  const { default: decodeAudio } = await import("@audio/decode");
   const audio = await decodeAudio(new Uint8Array(buffer));
   const channel = audio.channelData?.[0];
   if (!channel?.length) throw new Error("音频解码后为空（不支持的格式或损坏文件）");
@@ -74,13 +75,14 @@ export async function transcribeAudio(buffer: Buffer): Promise<TranscribeResult>
   const truncated = totalSec > MAX_SEC;
   const pcm = truncated ? full.subarray(0, MAX_SEC * 16000) : full;
 
-  const asr = await getAsr();
-  const out = await asr(pcm, {
-    chunk_length_s: 30,
-    stride_length_s: 5,
-    language: STT_LANG,
-    task: "transcribe",
-  });
+  const out = await withAsr((asr) =>
+    asr(pcm, {
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      language: STT_LANG,
+      task: "transcribe",
+    })
+  );
   const text = (out?.text ?? "").trim();
 
   return {

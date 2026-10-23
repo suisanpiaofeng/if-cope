@@ -5,15 +5,18 @@
  * 每个工具 = 一个独立组件，注册进 TOOLS 即出现在目录里。
  */
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import Sidebar from "@/components/Sidebar";
-import TextStats from "@/components/tools/TextStats";
-import JsonFormatter from "@/components/tools/JsonFormatter";
-import RegexTester from "@/components/tools/RegexTester";
-import CodecTools from "@/components/tools/CodecTools";
-import ImageCompress from "@/components/tools/ImageCompress";
-import QrCode from "@/components/tools/QrCode";
-import PdfMerge from "@/components/tools/PdfMerge";
-import Timestamp from "@/components/tools/Timestamp";
+
+// 工具组件按需加载：每个工具（含 pdf-lib / qrcode 等依赖）只在选中时才进包
+const TextStats = dynamic(() => import("@/components/tools/TextStats"));
+const JsonFormatter = dynamic(() => import("@/components/tools/JsonFormatter"));
+const RegexTester = dynamic(() => import("@/components/tools/RegexTester"));
+const CodecTools = dynamic(() => import("@/components/tools/CodecTools"));
+const ImageCompress = dynamic(() => import("@/components/tools/ImageCompress"));
+const QrCode = dynamic(() => import("@/components/tools/QrCode"));
+const PdfMerge = dynamic(() => import("@/components/tools/PdfMerge"));
+const Timestamp = dynamic(() => import("@/components/tools/Timestamp"));
 
 type Tool = {
   id: string;

@@ -1,4 +1,4 @@
-import db from "@/lib/db";
+import db, { getAigcCategoryId } from "@/lib/db";
 import { generateSummary } from "@/lib/artifact";
 
 /** Agent 工具：OpenAI function calling 格式。
@@ -32,7 +32,7 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "move_source",
-      description: "把资料移动到指定类目。注意：资料不能放入 AIGC，只能放普通类目或未归类(null)",
+      description: "把资料移动到指定类目（任意类目均可，含 AIGC）；null = 未归类",
       parameters: {
         type: "object",
         properties: {
@@ -47,12 +47,12 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "move_artifact",
-      description: "把产物（笔记等 AI 生成内容）移动到指定类目；null = 放回 AIGC",
+      description: "把产物（笔记等 AI 生成内容）移动到指定类目；产物默认生成在固定的 AIGC 类目；null = 未归类",
       parameters: {
         type: "object",
         properties: {
           artifact_id: { type: "integer", description: "产物 id" },
-          category_id: { type: ["integer", "null"], description: "目标类目 id；null = AIGC" },
+          category_id: { type: ["integer", "null"], description: "目标类目 id；null = 未归类" },
         },
         required: ["artifact_id"],
       },
@@ -146,7 +146,7 @@ export async function executeTool(call: ToolCall): Promise<string> {
         if (!cat) throw new Error(`类目 #${catId} 不存在`);
       }
       db.prepare("UPDATE artifacts SET category_id = ? WHERE id = ?").run(catId, id);
-      const dest = catId == null ? "AIGC" : `类目「${(db.prepare("SELECT name FROM categories WHERE id = ?").get(catId) as { name: string }).name}」`;
+      const dest = catId == null ? "未归类" : `类目「${(db.prepare("SELECT name FROM categories WHERE id = ?").get(catId) as { name: string }).name}」`;
       return `已把产物《${art.title}》移动到 ${dest}`;
     }
 
@@ -165,9 +165,9 @@ export async function executeTool(call: ToolCall): Promise<string> {
       const { title, content, model } = await generateSummary(ids);
       const info = db
         .prepare(
-          "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (NULL, 'summary', ?, ?, ?, ?, ?)"
+          "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, 'summary', ?, ?, ?, ?, ?)"
         )
-        .run(title, content, JSON.stringify(ids), model, Date.now());
+        .run(getAigcCategoryId(), title, content, JSON.stringify(ids), model, Date.now());
       return `已生成复习笔记《${title}》并存入 AIGC（产物 #${info.lastInsertRowid}，基于 ${ids.length} 份资料）。内容：\n\n${content.slice(0, 6000)}`;
     }
 

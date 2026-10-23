@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
+  parent_id INTEGER,
+  pinned INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sources (
@@ -105,6 +107,43 @@ END;
 if (!ftsExists) {
   // 首次建表：从 chunks 存量回填（此后由触发器自动维护）
   db.exec("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')");
+}
+
+/* ── 类目平权 + 子类目：AIGC 变为真实固定类目（pinned），产物默认落 AIGC；
+ * 「未归类」= category_id 为 NULL 的统称（资源和产物都可以在未归类） */
+const catCols = db.prepare("PRAGMA table_info(categories)").all() as { name: string }[];
+if (!catCols.some((c) => c.name === "parent_id")) {
+  db.exec("ALTER TABLE categories ADD COLUMN parent_id INTEGER");
+}
+if (!catCols.some((c) => c.name === "pinned")) {
+  db.exec("ALTER TABLE categories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+}
+
+let aigcRow = db.prepare("SELECT id FROM categories WHERE pinned = 1 ORDER BY id LIMIT 1").get() as
+  | { id: number }
+  | undefined;
+if (!aigcRow) {
+  const byName = db.prepare("SELECT id FROM categories WHERE name = 'AIGC'").get() as { id: number } | undefined;
+  if (byName) {
+    db.prepare("UPDATE categories SET pinned = 1 WHERE id = ?").run(byName.id);
+    aigcRow = byName;
+  } else {
+    const info = db.prepare("INSERT INTO categories (name, pinned, created_at) VALUES ('AIGC', 1, ?)").run(Date.now());
+    aigcRow = { id: Number(info.lastInsertRowid) };
+  }
+}
+// 历史产物（category_id 为 NULL）迁入 AIGC（仅当存在时，避免每次启动空跑 UPDATE）
+const nullArtifacts = db.prepare("SELECT COUNT(*) AS n FROM artifacts WHERE category_id IS NULL").get() as { n: number };
+if (nullArtifacts.n > 0) {
+  db.prepare("UPDATE artifacts SET category_id = ? WHERE category_id IS NULL").run(aigcRow.id);
+}
+
+/** AIGC 固定类目的 id（AI 产物默认落点） */
+export function getAigcCategoryId(): number | null {
+  const row = db.prepare("SELECT id FROM categories WHERE pinned = 1 ORDER BY id LIMIT 1").get() as
+    | { id: number }
+    | undefined;
+  return row?.id ?? null;
 }
 
 export type ModelSettings = {

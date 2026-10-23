@@ -60,6 +60,26 @@ function checkOf(ids: number[], selected: Set<number>): CheckState {
   return n === 0 ? "off" : n === ids.length ? "on" : "partial";
 }
 
+function TrashIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
+      <path d="M2.5 4h11M6.5 4V2.8c0-.4.3-.8.8-.8h1.4c.5 0 .8.4.8.8V4" strokeLinecap="round" />
+      <path d="M5.5 4l.5 9c0 .5.4.8.8.8h2.4c.4 0 .8-.3.8-.8l.5-9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.8 6.8v4.4M9.2 6.8v4.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SubCatIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+      <path d="M2 4.2c0-.5.4-.9.9-.9h2.7l1.2 1.4h6.3c.5 0 .9.4.9.9v1H2v-2.4Z" />
+      <path d="M3.2 7.6h9.6l-.7 4.9c-.05.4-.4.7-.8.7H4.7c-.4 0-.75-.3-.8-.7l-.7-4.9Z" />
+      <path d="M8 8.7v3M6.5 10.2h3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** 第二栏：类目树（AIGC + 普通类目 + 未归类），支持勾选、拖拽移动、上传 */
 export default function FilesPanel({
   sources, artifacts, categories, genError, selected, selectedArts,
@@ -71,7 +91,7 @@ export default function FilesPanel({
 }: {
   sources: Source[];
   artifacts: Artifact[];
-  categories: { id: number; name: string }[];
+  categories: { id: number; name: string; parent_id: number | null; pinned: number }[];
   genError: string | null;
   selected: Set<number>;
   /** 已勾选的产物（AIGC/类目里的成果） */
@@ -86,7 +106,7 @@ export default function FilesPanel({
   onDeleteSource: (id: number) => Promise<void>;
   onDeleteArtifact: (id: number) => Promise<void>;
   onDeleteCategory: (id: number) => Promise<void>;
-  onNewCategory: (name: string) => Promise<void>;
+  onNewCategory: (name: string, parentId: number | null) => Promise<void>;
   onMoveSource: (ids: number[], categoryId: number | null) => Promise<void>;
   onMoveArtifact: (ids: number[], categoryId: number | null) => Promise<void>;
   onOpenSource: (s: Source) => void;
@@ -101,6 +121,7 @@ export default function FilesPanel({
   // 新建类目小弹窗
   const [catOpen, setCatOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newCatParent, setNewCatParent] = useState<number | null>(null);
   const [busyDownload, setBusyDownload] = useState<number | null>(null);
 
   const notify = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
@@ -110,21 +131,27 @@ export default function FilesPanel({
     return next;
   });
 
-  const folders: Folder[] = [
-    { id: "aigc", name: "AIGC" },
-    ...categories.map((c) => ({ id: c.id as FolderId, name: c.name })),
-    { id: "ungrouped", name: "未归类" },
-  ];
+  /** 类目树：AIGC（固定）置顶，其余按父子关系展开，未归类垫底；所有类目平权 */
+  const aigcCat = categories.find((c) => c.pinned === 1) ?? null;
+  const childrenOf = (pid: number) => categories.filter((c) => c.parent_id === pid && c.pinned !== 1);
+  const folders: (Folder & { depth: number; pinned?: boolean })[] = [];
+  if (aigcCat) {
+    folders.push({ id: aigcCat.id, name: "AIGC", depth: 0, pinned: true });
+    for (const c of childrenOf(aigcCat.id)) folders.push({ id: c.id, name: c.name, depth: 1 });
+  }
+  for (const c of categories.filter((x) => x.parent_id == null && x.pinned !== 1)) {
+    folders.push({ id: c.id, name: c.name, depth: 0 });
+    for (const ch of childrenOf(c.id)) folders.push({ id: ch.id, name: ch.name, depth: 1 });
+  }
+  folders.push({ id: "ungrouped", name: "未归类", depth: 0 });
 
-  /** 各文件夹内的资源（用于勾选状态与计数） */
+  /** 各文件夹内的资源 / 产物（AIGC 和未归类对两者一视同仁） */
   const folderSources = (id: FolderId): Source[] =>
-    id === "aigc" ? []
-    : id === "ungrouped" ? sources.filter((s) => s.category_id == null)
+    id === "ungrouped" ? sources.filter((s) => s.category_id == null)
     : sources.filter((s) => s.category_id === id);
 
   const folderArtifacts = (id: FolderId): Artifact[] =>
-    id === "aigc" ? artifacts.filter((a) => a.category_id == null)
-    : id === "ungrouped" ? []
+    id === "ungrouped" ? artifacts.filter((a) => a.category_id == null)
     : artifacts.filter((a) => a.category_id === id);
 
   const allSourceIds = sources.map((s) => s.id);
@@ -149,12 +176,12 @@ export default function FilesPanel({
   async function createCategory() {
     const name = newName.trim();
     if (!name) return;
-    await onNewCategory(name);
-    setNewName(""); setCatOpen(false);
-    notify(`已创建类目「${name}」`);
+    await onNewCategory(name, newCatParent);
+    setNewName(""); setCatOpen(false); setNewCatParent(null);
+    notify(`已创建${newCatParent != null ? "子" : ""}类目「${name}」`);
   }
 
-  function closeCatModal() { setCatOpen(false); setNewName(""); }
+  function closeCatModal() { setCatOpen(false); setNewName(""); setNewCatParent(null); }
 
   /** 下载产物到本地（.md） */
   async function handleDownload(e: React.MouseEvent, a: Artifact) {
@@ -176,19 +203,18 @@ export default function FilesPanel({
       return;
     }
     if (e.dataTransfer.files.length) {
-      if (target === "aigc") { notify("AIGC 仅存放生成的成果，请拖到其他类目上传"); return; }
       await doUpload(Array.from(e.dataTransfer.files), target === "ungrouped" ? null : (target as number));
     }
   }
 
   async function handleInternalDrop(payload: DndPayload, target: FolderId) {
+    // 所有类目平权：资源与产物都可放入任意类目（含 AIGC 与未归类）
+    const catId = target === "ungrouped" ? null : (target as number);
     if (payload.kind === "source") {
-      if (target === "aigc") { notify("AIGC 仅存放生成的成果"); return; }
-      await onMoveSource(payload.ids, target === "ungrouped" ? null : (target as number));
+      await onMoveSource(payload.ids, catId);
       notify(`已移动 ${payload.ids.length} 个资源`);
     } else {
-      if (target === "ungrouped") { notify("成果已移回 AIGC"); await onMoveArtifact(payload.ids, null); return; }
-      await onMoveArtifact(payload.ids, target === "aigc" ? null : (target as number));
+      await onMoveArtifact(payload.ids, catId);
       notify(`已移动 ${payload.ids.length} 个成果`);
     }
   }
@@ -241,7 +267,7 @@ export default function FilesPanel({
           <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
             资源 <span className="num">{sources.length}</span>
           </span>
-          <button onClick={() => setCatOpen(true)} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋ 新建类目</button>
+          <button onClick={() => { setNewCatParent(null); setCatOpen(true); }} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋ 新建类目</button>
         </div>
 
         {/* 类目树 */}
@@ -252,7 +278,7 @@ export default function FilesPanel({
             const srcs = folderSources(f.id);
             const arts = folderArtifacts(f.id);
             const items = srcs.length + arts.length;
-            const isAigc = f.id === "aigc";
+            const isPinned = Boolean(f.pinned);
             // 类目选中态：资源（selected）+ 产物（selectedArts）合并计算
             const onCount =
               srcs.reduce((n, s) => n + (selected.has(s.id) ? 1 : 0), 0) +
@@ -264,42 +290,41 @@ export default function FilesPanel({
                 onDragLeave={() => setDragOver((cur) => (cur === f.id ? null : cur))}
                 onDrop={(e) => void handleDrop(e, f.id)}
               >
-                <div className={`group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 ${
+                <div style={{ marginLeft: (f.depth ?? 0) * 14 }} className={`group flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 ${
                   dragOver === f.id ? "bg-neutral-100 ring-1 ring-neutral-300" : "hover:bg-neutral-50"}`}>
                   <Check
                     state={cState}
                     title={cState === "on" ? "取消选择" : "选中该类目全部内容"}
-                    onClick={(e) => { e.stopPropagation(); onToggleFolder(f.id as number | "ungrouped" | "aigc"); }}
+                    onClick={(e) => { e.stopPropagation(); onToggleFolder(f.id as number | "ungrouped"); }}
                   />
                   <button onClick={() => toggle(key)} className="flex min-w-0 flex-1 items-center gap-1 text-left">
                     <svg className={`h-3 w-3 shrink-0 text-neutral-400 transition-transform ${isOpen ? "rotate-90" : ""}`} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
                       <path d="M4 2.5 8.5 6 4 9.5" />
                     </svg>
-                    {isAigc && (
+                    {isPinned && (
                       <svg className="h-3.5 w-3.5 shrink-0 text-violet-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
                         <path d="M8 1.5 9.4 5l3.6.3-2.7 2.4.8 3.5L8 9.4l-3.9 1.8.8-3.5L2.2 5.3 5.8 5 8 1.5Z" strokeLinejoin="round" />
                       </svg>
                     )}
-                    <span className={`truncate text-[13px] font-medium ${isAigc ? "text-violet-700" : "text-neutral-700"}`}>{f.name}</span>
+                    <span className={`truncate text-[13px] font-medium ${isPinned ? "text-violet-700" : "text-neutral-700"}`}>{f.name}</span>
                     <span className="num text-[11px] text-neutral-400">{items}</span>
                   </button>
-                  {typeof f.id === "number" && (() => {
-                    const numId = f.id as number;
-                    return (
-                      <button onClick={(e) => delCategory(e, numId)} title="删除类目（内容移回未归类）"
-                        className="hidden shrink-0 px-1 text-[11px] text-neutral-300 hover:text-red-600 group-hover:block">删</button>
-                    );
-                  })()}
-                  {!isAigc && (
-                    <button onClick={() => openUpload(f.id === "ungrouped" ? null : (f.id as number))} title="上传到此类目"
-                      className="hidden shrink-0 px-1 text-[11px] text-neutral-300 hover:text-neutral-900 group-hover:block">＋</button>
+                  {typeof f.id === "number" && !isPinned && (
+                    <button onClick={(e) => delCategory(e, f.id as number)} title="删除类目（资源回未归类、产物回 AIGC）"
+                      className="hidden shrink-0 px-1 text-neutral-300 hover:text-red-600 group-hover:block"><TrashIcon /></button>
                   )}
+                  {typeof f.id === "number" && (
+                    <button onClick={(e) => { e.stopPropagation(); setNewCatParent(f.id as number); setCatOpen(true); }} title="新建子类目"
+                      className="hidden shrink-0 px-1 text-neutral-300 hover:text-neutral-900 group-hover:block"><SubCatIcon /></button>
+                  )}
+                  <button onClick={() => openUpload(f.id === "ungrouped" ? null : (f.id as number))} title="上传到此类目"
+                    className="hidden shrink-0 px-1 text-[11px] text-neutral-300 hover:text-neutral-900 group-hover:block">＋</button>
                 </div>
                 {isOpen && (
                   <div className="ml-4 border-l border-neutral-100 pl-1.5">
                     {items === 0 && (
                       <p className="px-2 py-1.5 text-[11px] text-neutral-300">
-                        {dragOver === f.id ? "松开放入此处" : isAigc ? "暂无成果" : "空 · 可拖文件或资源进来"}
+                        {dragOver === f.id ? "松开放入此处" : "空 · 可拖文件、资源或成果进来"}
                       </p>
                     )}
                     {/* 资源条目 */}
@@ -323,7 +348,7 @@ export default function FilesPanel({
                         <button
                           onClick={(e) => { e.stopPropagation(); onDeleteSource(s.id); }}
                           title="删除"
-                          className="hidden shrink-0 px-0.5 text-[11px] text-neutral-300 hover:text-red-600 group-hover:block">删</button>
+                          className="hidden shrink-0 px-0.5 text-neutral-300 hover:text-red-600 group-hover:block"><TrashIcon /></button>
                       </div>
                     ))}
                     {/* 成果条目（可拖到其他类目） */}
@@ -356,7 +381,7 @@ export default function FilesPanel({
                         <button
                           onClick={(e) => { e.stopPropagation(); onDeleteArtifact(a.id); }}
                           title="删除"
-                          className="hidden shrink-0 px-0.5 text-[11px] text-neutral-300 hover:text-red-600 group-hover:block">删</button>
+                          className="hidden shrink-0 px-0.5 text-neutral-300 hover:text-red-600 group-hover:block"><TrashIcon /></button>
                       </div>
                     ))}
                   </div>
@@ -382,7 +407,12 @@ export default function FilesPanel({
       {catOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={closeCatModal}>
           <div className="w-[300px] rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-medium">新建类目</h3>
+            <h3 className="text-sm font-medium">新建{newCatParent != null ? "子" : ""}类目</h3>
+            {newCatParent != null && (
+              <p className="mt-1 text-[11px] text-neutral-400">
+                父类目：「{categories.find((c) => c.id === newCatParent)?.name ?? ""}」
+              </p>
+            )}
             <input
               autoFocus value={newName}
               onChange={(e) => setNewName(e.target.value)}

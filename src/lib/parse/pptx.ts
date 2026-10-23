@@ -1,8 +1,9 @@
-import JSZip from "jszip";
 import type { ParseResult } from "./index";
 
 /** PPTX 逐页（逐张幻灯片）提取文本，幻灯片号即页码 */
 export async function parsePptx(buffer: Buffer): Promise<ParseResult> {
+  // jszip 仅解析 PPTX 时才需要，懒加载保持主进程轻量
+  const { default: JSZip } = await import("jszip");
   const zip = await JSZip.loadAsync(buffer);
   const slideFiles = Object.keys(zip.files)
     .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))

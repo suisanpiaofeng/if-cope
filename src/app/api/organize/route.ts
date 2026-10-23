@@ -65,14 +65,14 @@ export async function POST() {
     .all() as SourceRow[];
   if (!sources.length) return NextResponse.json({ error: "资源库为空，无需整理" }, { status: 400 });
 
-  const cats = db.prepare("SELECT id, name FROM categories ORDER BY id").all() as CatRow[];
+  const cats = db.prepare("SELECT id, name FROM categories WHERE pinned = 0 ORDER BY id").all() as CatRow[];
   const catMembers = new Map<number, string[]>();
   for (const s of sources) {
     if (s.category_id != null) catMembers.set(s.category_id, [...(catMembers.get(s.category_id) ?? []), s.title]);
   }
   const catDesc = cats
     .map((c) => {
-      const titles = (catMembers.get(c.id) ?? []).slice(0, 3).join("、");
+      const titles = (catMembers.get(c.id) ?? []).slice(0, 8).join("、");
       return `- id=${c.id}「${c.name}」${titles ? `（现有：${titles}…）` : "（暂无资源）"}`;
     })
     .join("\n") || "（还没有任何类目）";
@@ -99,7 +99,7 @@ export async function POST() {
           { role: "system", content: SYSTEM },
           { role: "user", content: `已有类目清单：\n${catDesc}\n\n资源清单：\n${list}` },
         ],
-        temperature: 0.2,
+        temperature: 0.1,
       }),
     });
     if (!res.ok) return NextResponse.json({ error: `模型接口错误 HTTP ${res.status}` }, { status: 502 });
@@ -222,7 +222,8 @@ export async function POST() {
   const empty = db
     .prepare(
       `SELECT c.id, c.name FROM categories c
-       WHERE NOT EXISTS (SELECT 1 FROM sources s WHERE s.category_id = c.id)
+       WHERE c.pinned = 0
+         AND NOT EXISTS (SELECT 1 FROM sources s WHERE s.category_id = c.id)
          AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.category_id = c.id)`
     )
     .all() as CatRow[];

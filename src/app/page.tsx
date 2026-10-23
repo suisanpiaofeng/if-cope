@@ -8,7 +8,7 @@ import ChatPanel from "@/components/ChatPanel";
 import type { Source } from "@/lib/types";
 import { filePreviewKind } from "@/lib/preview";
 
-type Category = { id: number; name: string };
+type Category = { id: number; name: string; parent_id: number | null; pinned: number };
 
 export default function Workspace() {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -165,10 +165,10 @@ export default function Workspace() {
     await load();
   }
 
-  async function newCategory(name: string) {
+  async function newCategory(name: string, parentId: number | null = null) {
     await fetch("/api/categories", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, parentId }),
     });
     await load();
   }
