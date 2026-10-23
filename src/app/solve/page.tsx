@@ -21,6 +21,7 @@ import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
 import { DND_MIME, readDnd } from "@/lib/dnd";
 import {
   nextNodePosition,
+  normalizeQaMap,
   qaCardToMarkdown,
   qaMapToMarkdown,
   type QaMapData,
@@ -64,6 +65,7 @@ export default function SolvePage() {
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [dropOver, setDropOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setActiveKey((k) => k || tabs[0].key);
@@ -232,6 +234,39 @@ export default function SolvePage() {
     setActiveKey(t.key);
   }
 
+  /** 导入知识地图（导出的 JSON）：校验 → 存为产物 → 新标签打开续写 */
+  async function importMap(f: File | undefined) {
+    if (!f) return;
+    setError("");
+    try {
+      const raw: unknown = JSON.parse(await f.text());
+      const map = normalizeQaMap(raw);
+      if (!map) throw new Error("不是有效的知识地图 JSON（需含 nodes 卡片数组）");
+      const res = await fetch("/api/artifacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: map.title, content: JSON.stringify(map), kind: "qa-map", sourceIds: [] }),
+      });
+      const d = (await res.json()) as { id?: number; error?: string };
+      if (!res.ok || d.id == null) throw new Error(d.error || "导入失败");
+      const t: MapTab = {
+        key: `m${Date.now().toString(36)}${tabSeq++}`,
+        mapId: d.id,
+        title: map.title,
+        nodes: map.nodes,
+        selectedId: null,
+      };
+      setTabs((prev) => [...prev, t]);
+      setActiveKey(t.key);
+      setNotice(`已导入《${map.title}》（${map.nodes.length} 张卡片），可继续追问续写`);
+      loadHistory();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (importRef.current) importRef.current.value = "";
+    }
+  }
+
   function closeTab(key: string) {
     setTabs((prev) => {
       const next = prev.filter((t) => t.key !== key);
@@ -318,7 +353,17 @@ export default function SolvePage() {
             <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
               我的知识地图 <span className="num">{history.length}</span>
             </span>
-            <button onClick={addTab} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋ 新地图</button>
+            <div className="flex gap-1">
+              <button onClick={() => importRef.current?.click()} className="text-[11px] text-neutral-400 hover:text-neutral-900">导入</button>
+              <button onClick={addTab} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋ 新地图</button>
+            </div>
+            <input
+              ref={importRef}
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(e) => void importMap(e.target.files?.[0])}
+            />
           </div>
           <div className="mt-1 space-y-0.5">
             {history.length === 0 ? (

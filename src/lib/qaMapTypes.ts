@@ -64,6 +64,47 @@ export function nextNodePosition(
   return { x: maxX + 90, y: 60 };
 }
 
+/** 校验并整形导入的知识地图 JSON（外部文件不可全信） */
+export function normalizeQaMap(raw: unknown): QaMapData | null {
+  const obj = raw as Partial<QaMapData>;
+  if (!obj || typeof obj !== "object" || !Array.isArray(obj.nodes) || obj.nodes.length === 0) return null;
+  const seen = new Set<string>();
+  const nodes: QaMapNode[] = [];
+  for (const n of obj.nodes as Array<Partial<QaMapNode>>) {
+    const id = String(n.id ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    nodes.push({
+      id,
+      parentId: n.parentId == null ? null : String(n.parentId),
+      round: Number.isFinite(Number(n.round)) && Number(n.round) > 0 ? Number(n.round) : 1,
+      title: String(n.title ?? "卡片").slice(0, 40) || "卡片",
+      question: String(n.question ?? ""),
+      answer: String(n.answer ?? ""),
+      citations: Array.isArray(n.citations)
+        ? n.citations
+            .filter((c) => c && Number.isFinite(Number(c.sourceId)))
+            .map((c) => ({
+              n: Number(c.n) || 0,
+              sourceId: Number(c.sourceId),
+              title: String(c.title ?? "资料").slice(0, 40),
+              page: c.page == null ? null : Number(c.page),
+              quote: String(c.quote ?? "").slice(0, 60),
+            }))
+        : undefined,
+      x: Number.isFinite(Number(n.x)) ? Number(n.x) : 60,
+      y: Number.isFinite(Number(n.y)) ? Number(n.y) : 60,
+      w: Number.isFinite(Number(n.w)) ? Number(n.w) : 340,
+      h: Number.isFinite(Number(n.h)) ? Number(n.h) : 280,
+    });
+  }
+  // 父指向不存在的节点 → 提升为根，防图断裂
+  for (const n of nodes) {
+    if (n.parentId && !seen.has(n.parentId)) n.parentId = null;
+  }
+  return { title: String(obj.title ?? "").trim().slice(0, 60) || "导入的知识地图", nodes };
+}
+
 /** 单张卡片 → markdown（归档到知识库用） */
 export function qaCardToMarkdown(node: QaMapNode): string {
   const lines = [`# ${node.title}`, "", `**提问**：${node.question}`, "", node.answer, ""];
