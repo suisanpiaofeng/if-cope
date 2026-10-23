@@ -1,0 +1,12 @@
+node_modules
+.next
+data
+logs
+*.tsbuildinfo
+next-env.d.ts
+.env*
+
+# 凭据类文件，绝不入库
+verify/cvs-cookie.txt
+*.key
+*.pem

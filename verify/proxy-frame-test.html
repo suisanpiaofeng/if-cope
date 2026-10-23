@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>CVS 内嵌显示框验证 - 反代方案</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; background: #fff; color: #222; }
+  header { padding: 10px 16px; border-bottom: 2px solid #222; }
+  h1 { margin: 0; font-size: 16px; }
+  .sub { color: #666; font-size: 12px; }
+  .row { display: flex; gap: 8px; padding: 10px 16px; align-items: center; flex-wrap: wrap; }
+  input[type=text] { flex: 1; min-width: 300px; padding: 6px 8px; border: 1px solid #999; border-radius: 0; font-size: 13px; }
+  button { padding: 6px 14px; border: 1px solid #222; background: #222; color: #fff; border-radius: 0; cursor: pointer; font-size: 13px; }
+  button.ghost { background: #fff; color: #222; }
+  iframe { width: 100%; height: 620px; border: 2px solid #222; background: #f7f7f7; }
+  .panel { border-top: 1px solid #ccc; padding: 10px 16px; }
+  code { background: #f0f0f0; padding: 1px 4px; }
+  ol { margin: 6px 0; padding-left: 20px; }
+  .tag { display: inline-block; border: 1px solid #222; padding: 0 6px; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CVS 内嵌显示框验证 · 反代方案 <span class="tag">cookie 入手</span></h1>
+  <div class="sub">
+    iframe 指向的是 <code>http://localhost:3778/...</code>（自家反代），响应头里的 X-Frame-Options 已被剥掉，
+    Cookie 由 Node 服务端代带 → 浏览器侧没有任何限制。iframe 里显示的就是 CVS 真实页面。
+  </div>
+</header>
+
+<div class="row">
+  <input id="path" type="text" value="http://localhost:3778/jy-application-resourcemanage-ui/#/home">
+  <button onclick="go()">载入</button>
+  <button class="ghost" onclick="setPath('/jy-application-resourcemanage-ui/#/home')">首页</button>
+  <button class="ghost" onclick="setPath('/jy-application-resourcemanage-ui/#/play-center')">play-center</button>
+  <button class="ghost" onclick="window.open(document.getElementById('path').value)">新窗口打开</button>
+</div>
+
+<div style="padding:0 16px"><iframe id="frame" src="http://localhost:3778/jy-application-resourcemanage-ui/#/home"></iframe></div>
+
+<div class="panel">
+  <b>使用步骤</b>
+  <ol>
+    <li>浏览器登录 <code>cvs.seu.edu.cn</code> → F12 → Network → 刷新 → 点第一个请求 → Request Headers → 右键复制 <code>Cookie:</code> 整行的值。</li>
+    <li>粘贴保存到 <code>verify/cvs-cookie.txt</code>（就一行，不要带 "Cookie:" 前缀也行，脚本都能处理）。</li>
+    <li>运行 <code>node verify/cvs-proxy.js</code>，看到「反代已启动」后刷新本页。</li>
+    <li>iframe 里能看到登录后的页面 = 成功；若提示未登录 = Cookie 过期/不全，重取一次。</li>
+  </ol>
+  <b>判定</b>：iframe 内能看回放播放页 → 「应用内嵌回放窗」成立，可直接做成 IF.Cope 课程学习区的正式形态；
+  Cookie 有效期实测（大概率几小时~1 天）决定产品里要做"一键重登/自动续期"。
+</div>
+</body>
+<script>
+function setPath(p) { document.getElementById('path').value = 'http://localhost:3778' + p; go(); }
+function go() { document.getElementById('frame').src = document.getElementById('path').value; }
+</script>
+</html>

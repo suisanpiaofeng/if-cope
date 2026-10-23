@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+/* IF.Cope 本地 Demo —— 对齐词来的白色简洁风格：
+   白底、中性灰、克制用色；Inter + 思源黑体；等宽字体只用于 Key/模型名 */
+:root {
+  --font-sans: Inter, "Source Han Sans SC", "思源黑体", "Noto Sans SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background: #ffffff;
+  color: #171717;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* 细节点：数字与关键量稍提字重，但不靠细字重装科技感 */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 运行中任务的呼吸灯 */
+@keyframes breathe {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.35); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); }
+}
+.breathe {
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+/* 拖动分栏时禁止选中文本 */
+body.resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+/* 资源/成果 纵向拖动 */
+body.resizing-row {
+  user-select: none;
+  cursor: row-resize;
+}
+
+/* 代码高亮（轻量自实现配色，克制不抢眼） */
+.hl-kw { color: #7c3aed; }
+.hl-str { color: #059669; }
+.hl-com { color: #9ca3af; font-style: italic; }
+.hl-num { color: #c2410c; }
+
+/* DOCX 预览（mammoth 输出的语义化 HTML） */
+.docx-view h1 { margin: 1.4em 0 0.5em; font-size: 1.4em; font-weight: 700; color: #171717; }
+.docx-view h2 { margin: 1.2em 0 0.45em; font-size: 1.2em; font-weight: 650; color: #171717; }
+.docx-view h3, .docx-view h4, .docx-view h5, .docx-view h6 { margin: 1em 0 0.4em; font-weight: 600; color: #262626; }
+.docx-view p { margin: 0.6em 0; }
+.docx-view ul { list-style: disc; padding-left: 1.6em; margin: 0.6em 0; }
+.docx-view ol { list-style: decimal; padding-left: 1.6em; margin: 0.6em 0; }
+.docx-view li { margin: 0.2em 0; }
+.docx-view table { border-collapse: collapse; margin: 1em 0; width: 100%; font-size: 13px; }
+.docx-view th, .docx-view td { border: 1px solid #e5e5e5; padding: 6px 10px; text-align: left; }
+.docx-view th { background: #fafafa; font-weight: 600; }
+.docx-view blockquote { border-left: 3px solid #e5e5e5; margin: 0.8em 0; padding: 0.2em 0 0.2em 1em; color: #737373; }

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>CVS 视频流验证 - 内置播放器路线（路线 B）</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; background: #fff; color: #222; }
+  header { padding: 10px 16px; border-bottom: 2px solid #222; }
+  h1 { margin: 0; font-size: 16px; }
+  .sub { color: #666; font-size: 12px; }
+  .row { display: flex; gap: 8px; padding: 10px 16px; align-items: center; flex-wrap: wrap; }
+  input[type=text] { flex: 1; min-width: 300px; padding: 6px 8px; border: 1px solid #999; border-radius: 0; font-size: 13px; }
+  select { padding: 6px; border: 1px solid #999; border-radius: 0; }
+  button { padding: 6px 14px; border: 1px solid #222; background: #222; color: #fff; border-radius: 0; cursor: pointer; font-size: 13px; }
+  button.ghost { background: #fff; color: #222; }
+  video { width: 100%; max-height: 60vh; background: #000; border: 2px solid #222; }
+  #log { height: 180px; overflow: auto; border: 1px solid #ccc; padding: 8px; background: #fafafa; font-family: Consolas, monospace; font-size: 12px; margin: 0 16px; }
+  .logline { border-bottom: 1px dotted #ddd; padding: 2px 0; }
+  .ok { color: #0a7a2f; } .warn { color: #b36b00; } .err { color: #c0272d; } .info { color: #555; }
+  .panel { border-top: 1px solid #ccc; padding: 10px 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { border: 1px solid #bbb; padding: 5px 8px; text-align: left; }
+  th { background: #f0f0f0; }
+  code { background: #f0f0f0; padding: 1px 4px; }
+  textarea { width: 100%; height: 100px; border: 1px solid #999; font-family: Consolas, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CVS 视频流验证 · 路线 B（应用内置 &lt;video&gt; 播放器）</h1>
+  <div class="sub">
+    原理：<code>&lt;video src&gt;</code> 媒体元素<b>不受 CORS 限制</b>，即使平台没开跨域头也能跨域播放。
+    本页验证「拿到流地址后能否直接在自己页面里播」，这是"内置显示框看回放"仅存的浏览器侧路线。<br>
+    ⚠ 合规边界（同 skill）：仅在线播放授权范围内的回放，<b>不下载、不落盘、不传播</b>媒体文件。
+  </div>
+</header>
+
+<div class="row">
+  <input id="url" type="text" placeholder="粘贴视频流地址（从 course_vod_urls_new 接口响应或播放页 DevTools Network 里复制）">
+  <select id="type">
+    <option value="auto">自动识别</option>
+    <option value="mp4">MP4 直链</option>
+    <option value="hls">HLS (.m3u8)</option>
+    <option value="flv">FLV</option>
+    <option value="m3u8-proxy">HLS 且流地址需带 Referer/Cookie（测跨域）</option>
+  </select>
+  <button onclick="loadStream()">加载播放</button>
+  <button class="ghost" onclick="resetAll()">重置</button>
+</div>
+
+<div style="padding: 0 16px">
+  <video id="video" controls preload="metadata"></video>
+</div>
+
+<div style="padding:8px 16px">
+  <b>人工判定：</b>
+  <button class="ghost" onclick="judge('ok')">✔ 画面声音正常</button>
+  <button class="ghost" onclick="judge('video-only')">◐ 有画面无声音</button>
+  <button class="ghost" onclick="judge('fail')">✘ 播不了</button>
+</div>
+
+<div id="log"></div>
+
+<div class="panel">
+  <b>结论</b>
+  <table>
+    <tr><th style="width:200px">判定项</th><th>结果</th></tr>
+    <tr><td>流地址来源</td><td id="v-src">待测</td></tr>
+    <tr><td>播放结果</td><td id="v-play">待测</td></tr>
+    <tr><td>音频轨</td><td id="v-audio">待测</td></tr>
+    <tr><td>地址是否过期/要鉴权</td><td id="v-auth">待测</td></tr>
+    <tr><td>结论</td><td id="v-verdict">待测后自动给出</td></tr>
+  </table>
+  <div style="margin:8px 0">
+    <button class="ghost" onclick="exportResult()">复制结果（Markdown）</button>
+  </div>
+  <textarea id="out"></textarea>
+</div>
+
+<div class="panel">
+  <b>怎么拿到流地址（3 步）</b>
+  <ol>
+    <li>登录 <code>cvs.seu.edu.cn</code>，打开某节课的播放页，按 F12 → Network → 筛选 <code>XHR</code>。</li>
+    <li>找 <code>course_vod_urls_new</code>（或含 <code>vod</code>/<code>url</code> 的响应），在 Response 里复制视频地址数组。
+      <br>⚠ skill 结论：<code>courseVodViewList</code> 里 <b>viewNum=1 是屏幕录像（常无音轨）；课堂音频在 viewNum=5（aac）或 viewNum=3（pcm_alaw）</b>——只测一个地址不够，两个都要试。</li>
+    <li>粘到本页测试。若报跨域/403，把「Network 里该请求的 Request Headers（Authorization/Cookie/Referer）」记入结果，这决定服务端或扩展要不要代带鉴权头。</li>
+  </ol>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const logEl = document.getElementById('log');
+const results = { src: '', play: '待测', audio: '待测', auth: '待测', type: '' };
+let hls = null, flvPlayer = null;
+
+function log(msg, cls = 'info') {
+  const t = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = 'logline ' + cls;
+  div.textContent = `[${t}] ${msg}`;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error('CDN 加载失败: ' + src));
+    document.head.appendChild(s);
+  });
+}
+function resetAll() {
+  if (hls) { hls.destroy(); hls = null; }
+  if (flvPlayer) { flvPlayer.destroy(); flvPlayer = null; }
+  video.removeAttribute('src'); video.load();
+  log('已重置', 'info');
+}
+async function loadStream() {
+  const url = document.getElementById('url').value.trim();
+  if (!url) return log('先粘贴流地址', 'warn');
+  resetAll();
+  results.src = url.replace(/([?&])(token|sign|signature|key)=[^&]+/gi, '$1$2=***');
+  let type = document.getElementById('type').value;
+  if (type === 'auto') {
+    type = url.includes('.m3u8') ? 'hls' : url.includes('.flv') ? 'flv' : 'mp4';
+    log(`自动识别类型：${type}`, 'info');
+  }
+  results.type = type;
+  try {
+    if (type === 'mp4') {
+      video.src = url;
+    } else if (type === 'hls' || type === 'm3u8-proxy') {
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        log('浏览器原生支持 HLS，直接 <video src>', 'info');
+        video.src = url;
+      } else {
+        await loadScript('https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js');
+        hls = new Hls({ xhrSetup: (xhr) => { xhr.withCredentials = false; } });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (_, d) => log(`hls.js 事件：${d.type} / ${d.details}${d.response ? ' / HTTP ' + d.response.code : ''}`, d.fatal ? 'err' : 'warn'));
+        log('hls.js 已挂载', 'ok');
+      }
+    } else if (type === 'flv') {
+      await loadScript('https://cdn.jsdelivr.net/npm/flv.js@1/dist/flv.min.js');
+      flvPlayer = flvjs.createPlayer({ type: 'flv', url, isLive: false });
+      flvPlayer.attachMediaElement(video);
+      flvPlayer.load();
+      flvPlayer.on(flvjs.Events.ERROR, (t, d) => log(`flv.js 错误：${t} / ${d}`, 'err'));
+      log('flv.js 已挂载', 'ok');
+    }
+    video.play().catch(() => log('自动播放被浏览器拦截，请手动点播放按钮', 'warn'));
+  } catch (e) {
+    log('加载失败：' + e.message, 'err');
+  }
+}
+video.addEventListener('loadedmetadata', () => {
+  log(`loadedmetadata：时长 ${Math.round(video.duration)}s，分辨率 ${video.videoWidth}x${video.videoHeight}`, 'ok');
+  // 音轨检测：AudioContext 分析（粗略，能播不代表有声音）
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaElementSource(video);
+    const an = ctx.createAnalyser();
+    src.connect(an); an.connect(ctx.destination);
+    let peak = 0;
+    const data = new Uint8Array(an.frequencyBinCount);
+    const timer = setInterval(() => {
+      an.getByteFrequencyData(data);
+      peak = Math.max(peak, Math.max(...data));
+      if (peak > 0) { results.audio = '✔ 检测到音频信号'; document.getElementById('v-audio').textContent = results.audio; clearInterval(timer); }
+    }, 300);
+    setTimeout(() => { if (peak === 0) { results.audio = '◐ 播放中未检测到音频（可能无音轨/未播到有声段）'; document.getElementById('v-audio').textContent = results.audio; } clearInterval(timer); }, 15000);
+    log('音轨检测已启动（播放几秒后出结果）', 'info');
+  } catch (e) { log('音轨检测不可用：' + e.message, 'warn'); }
+});
+video.addEventListener('error', () => {
+  const e = video.error;
+  log(`video error：code=${e && e.code} ${e && e.message || ''}（若是网络/解码失败，通常=需要带鉴权头或格式不支持）`, 'err');
+});
+function judge(kind) {
+  if (kind === 'ok') {
+    results.play = '✔ 画面声音正常'; results.audio = '✔ 有声音';
+    log('人工判定：路线 B 成立，可做内置播放器', 'ok');
+  } else if (kind === 'video-only') {
+    results.play = '✔ 画面正常'; results.audio = '✘ 无声音（大概率取到的是 viewNum=1 录屏流，换 viewNum=5/3 的地址重测）';
+    log('人工判定：有画面无声音 → 换音频流地址重测', 'warn');
+  } else {
+    results.play = '✘ 播放失败';
+    log('人工判定：播放失败 → 记录 Network 报错（403/CORS/过期），决定是否需要扩展或服务端带鉴权', 'err');
+  }
+  updateVerdict();
+}
+function updateVerdict() {
+  document.getElementById('v-src').textContent = results.src || '未测';
+  document.getElementById('v-play').textContent = results.play;
+  document.getElementById('v-audio').textContent = results.audio;
+  document.getElementById('v-auth').textContent = results.auth;
+  let v = '';
+  if (results.play.startsWith('✔') && results.audio.startsWith('✔')) v = '路线 B 成立：应用内 <video> 直拉流可行，「内置显示框看回放」采用自研播放器 + 官方页弹窗兜底';
+  else if (results.play.startsWith('✔')) v = '画面可行、音频待换源：取 viewNum=5/3 流再测';
+  else if (results.play.startsWith('✘')) v = '直拉不可行（鉴权/过期/格式）→ 退回路线 A（弹窗并排），或用浏览器扩展/受控浏览器带鉴权头再试';
+  else v = '待测后自动给出';
+  document.getElementById('v-verdict').textContent = v;
+}
+function exportResult() {
+  updateVerdict();
+  const md = `## CVS 视频流验证结果（路线 B）
+
+- 流地址：${results.src || document.getElementById('url').value}
+- 类型：${results.type}
+- 测试时间：${new Date().toLocaleString()}
+- 播放：${results.play}
+- 音轨：${results.audio}
+- 鉴权/过期：${results.auth}
+- 结论：${document.getElementById('v-verdict').textContent}
+`;
+  document.getElementById('out').value = md;
+  navigator.clipboard && navigator.clipboard.writeText(md);
+  log('结果已生成并尝试复制', 'ok');
+}
+document.getElementById('url').addEventListener('change', () => { results.auth = '观察地址隔天是否失效（重登后是否要重新抓）'; document.getElementById('v-auth').textContent = results.auth; });
+log('就绪。先按下方说明抓一个流地址（viewNum=5/3 的音频流也要测），粘贴后点「加载播放」', 'ok');
+</script>
+</body>
+</html>

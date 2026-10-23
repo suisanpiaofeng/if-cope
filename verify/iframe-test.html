@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>CVS 内嵌可行性验证 - iframe 闸门测试</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; background: #fff; color: #222; }
+  header { padding: 10px 16px; border-bottom: 2px solid #222; }
+  h1 { margin: 0; font-size: 16px; }
+  .sub { color: #666; font-size: 12px; }
+  .row { display: flex; gap: 8px; padding: 10px 16px; align-items: center; flex-wrap: wrap; }
+  input[type=text] { flex: 1; min-width: 320px; padding: 6px 8px; border: 1px solid #999; border-radius: 0; font-size: 13px; }
+  button { padding: 6px 14px; border: 1px solid #222; background: #222; color: #fff; border-radius: 0; cursor: pointer; font-size: 13px; }
+  button.ghost { background: #fff; color: #222; }
+  button:hover { opacity: .85; }
+  .panel { border-top: 1px solid #ccc; padding: 10px 16px; }
+  .grid { display: grid; grid-template-columns: 1fr 420px; gap: 12px; padding: 0 16px 16px; }
+  iframe { width: 100%; height: 560px; border: 2px solid #222; background: #f7f7f7; }
+  #log { height: 560px; overflow: auto; border: 1px solid #ccc; padding: 8px; background: #fafafa; font-family: Consolas, monospace; font-size: 12px; }
+  .logline { border-bottom: 1px dotted #ddd; padding: 2px 0; }
+  .ok { color: #0a7a2f; } .warn { color: #b36b00; } .err { color: #c0272d; } .info { color: #555; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { border: 1px solid #bbb; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f0; }
+  code { background: #f0f0f0; padding: 1px 4px; }
+  .check { margin: 4px 0; }
+  textarea { width: 100%; height: 120px; border: 1px solid #999; font-family: Consolas, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CVS 内嵌可行性验证 · 闸门闸门①②③</h1>
+  <div class="sub">
+    测试目标：确认 <b>iframe 能否内嵌</b>（X-Frame-Options / CSP frame-ancestors）、<b>iframe 内登录态是否可用</b>（第三方 Cookie / SameSite）。
+    同源策略（闸门③）是浏览器铁律，无需测试——父页面永远读不到跨域 iframe 内部，数据抓取必须走独立通道。
+  </div>
+</header>
+
+<div class="row">
+  <input id="url" type="text" value="https://cvs.seu.edu.cn/jy-application-resourcemanage-ui/#/home">
+  <button onclick="startTest()">开始内嵌测试</button>
+  <button class="ghost" onclick="preset('https://cvs.seu.edu.cn/jy-application-resourcemanage-ui/#/home')">首页</button>
+  <button class="ghost" onclick="preset('https://cvs.seu.edu.cn/jy-application-resourcemanage-ui/#/play-center')">play-center</button>
+  <button class="ghost" onclick="preset(prompt('粘贴完整播放页地址（含 teclId 或 #/play-center?...）')||'')">播放页自定义</button>
+</div>
+
+<div class="grid">
+  <div>
+    <iframe id="frame" src="about:blank"></iframe>
+    <div style="padding:8px 0">
+      <b>人工判定（看完右侧画面后点）：</b>
+      <button class="ghost" onclick="judge('ok')">✔ 能看到页面内容</button>
+      <button class="ghost" onclick="judge('blocked')">✘ 白屏 / 浏览器报错页</button>
+      <button class="ghost" onclick="judge('login-stuck')">◐ 能显示但登录登不上/掉登录</button>
+    </div>
+    <div class="panel" style="border:1px solid #ccc">
+      <b>响应头硬证据（终端执行，结果最权威）：</b>
+      <pre style="background:#f5f5f5;padding:8px;overflow:auto">curl -sI "https://cvs.seu.edu.cn/jy-application-resourcemanage-ui/" | findstr /i "x-frame content-security set-cookie"
+curl -sI "https://cvs.seu.edu.cn/jy-application-resourcemanage-ui/#/play-center" | findstr /i "x-frame content-security set-cookie"</pre>
+      <div class="check"><b>2026-10-23 服务端实测（已确认）：</b><code>X-Frame-Options: SAMEORIGIN</code>；Set-Cookie 无 SameSite（默认 Lax）→ iframe 内嵌 + iframe 内登录 <b>双重不可行</b>。本页用于浏览器侧复核。</div>
+      <div class="check"><input type="checkbox" id="h1"><label for="h1"> 响应头有 <code>X-Frame-Options</code>（值是什么：<input id="h1v" type="text" style="width:160px" placeholder="DENY / SAMEORIGIN">）</label></div>
+      <div class="check"><input type="checkbox" id="h2"><label for="h2"> 响应头 CSP 含 <code>frame-ancestors</code>（值：<input id="h2v" type="text" style="width:160px" placeholder="'self' / 域名">）</label></div>
+      <div class="check"><input type="checkbox" id="h3"><label for="h3"> <code>Set-Cookie</code> 带 <code>SameSite=Strict/Lax</code> 或 <code>Secure; HttpOnly</code>（记录：<input id="h3v" type="text" style="width:160px">）</label></div>
+      <div class="check"><input type="checkbox" id="h4"><label for="h4"> 浏览器控制台出现 <code>Refused to display ... in a frame</code> / <code>frame-ancestors</code> 报错</label></div>
+    </div>
+  </div>
+
+  <div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <b>结论汇总（可直接复制进文档）</b>
+  <table>
+    <tr><th style="width:180px">判定项</th><th>结果</th></tr>
+    <tr><td>iframe 可内嵌？</td><td id="v-frame">待测</td></tr>
+    <tr><td>iframe 内登录可用？</td><td id="v-login">待测</td></tr>
+    <tr><td>响应该头证据</td><td id="v-headers">待测</td></tr>
+    <tr><td>推选路线</td><td id="v-route">待测后自动给出</td></tr>
+  </table>
+  <div style="margin-top:8px">
+    <button class="ghost" onclick="exportResult()">复制结果（Markdown）</button>
+  </div>
+  <textarea id="out" placeholder="结果会出现在这里，复制后贴给 AI 或记进文档"></textarea>
+</div>
+
+<script>
+const logEl = document.getElementById('log');
+const results = { frame: '待测', login: '待测', headers: [], notes: [], url: '' };
+function log(msg, cls = 'info') {
+  const t = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = 'logline ' + cls;
+  div.textContent = `[${t}] ${msg}`;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function preset(u) { if (u) { document.getElementById('url').value = u; startTest(); } }
+function startTest() {
+  const url = document.getElementById('url').value.trim();
+  if (!url) return;
+  results.url = url;
+  const f = document.getElementById('frame');
+  log(`加载 iframe → ${url}`, 'info');
+  log('提示：按 F12 打开控制台，若被拦截会出现 "Refused to display ... in a frame" 报错', 'warn');
+  f.onload = () => {
+    log('iframe onload 触发（注意：被拦截时浏览器有时也会触发 onload，最终以画面+控制台为准）', 'warn');
+    // 试探性读取：跨域成功加载和被拦截都会抛 SecurityError，仅作参考记录
+    try {
+      const href = f.contentWindow.location.href;
+      log(`读取 iframe 地址成功（同源）：${href}`, 'ok');
+    } catch (e) {
+      log(`读取 iframe 内部被拒（符合预期，跨域）：${e.name}`, 'info');
+    }
+  };
+  f.onerror = () => log('iframe onerror 触发（明显被拒）', 'err');
+  f.src = url;
+}
+function judge(kind) {
+  if (kind === 'ok') {
+    results.frame = '✔ 可内嵌';
+    log('人工判定：可内嵌 → 闸门①通过', 'ok');
+    log('继续验证闸门②：请在 iframe 里尝试登录，停留 1-2 分钟刷新看登录态是否保持', 'warn');
+    results.login = '待测（请在 iframe 内登录验证）';
+  } else if (kind === 'blocked') {
+    results.frame = '✘ 被拦截（X-Frame-Options 或 frame-ancestors）';
+    log('人工判定：被拦截 → 路线 C（Electron webview）或 A（弹窗并排），iframe 方案出局', 'err');
+  } else {
+    results.login = '✘ iframe 内登录不可用（第三方 Cookie 被拦）';
+    log('人工判定：能显示但登录废 → 即使内嵌也只是个"看"的框，登录必须走弹窗/令牌', 'warn');
+  }
+  updateVerdict();
+}
+function collectHeaders() {
+  const map = { h1: 'X-Frame-Options', h2: 'CSP frame-ancestors', h3: 'Set-Cookie', h4: '控制台 frame 报错' };
+  results.headers = [];
+  for (const id in map) {
+    const cb = document.getElementById(id);
+    const v = document.getElementById(id + 'v');
+    if (cb.checked) results.headers.push(`${map[id]}${v && v.value ? '=' + v.value : ''}`);
+  }
+}
+function updateVerdict() {
+  document.getElementById('v-frame').textContent = results.frame;
+  document.getElementById('v-login').textContent = results.login;
+  collectHeaders();
+  document.getElementById('v-headers').textContent = results.headers.length ? results.headers.join('；') : '未记录';
+  let route = '';
+  if (results.frame.startsWith('✘')) {
+    route = 'iframe 出局 → 一期用 A（应用内卡片 + window.open 官方页并排），二期试 B（video 直拉视频流），桌面版可选 C（webview 真内嵌）';
+  } else if (results.login.startsWith('✘')) {
+    route = '能显示但登录废 → iframe 只当"看"的窗口，登录/数据走令牌连接器（独立通道）';
+  } else if (results.frame.startsWith('✔')) {
+    route = 'iframe 可用 → 可以内嵌当观看窗；数据抓取仍走令牌通道（同源策略，读不了 iframe 内部）';
+  } else {
+    route = '待测后自动给出';
+  }
+  document.getElementById('v-route').textContent = route;
+}
+function exportResult() {
+  collectHeaders();
+  updateVerdict();
+  const md = `## CVS 内嵌可行性验证结果
+
+- 测试地址：${results.url || document.getElementById('url').value}
+- 测试时间：${new Date().toLocaleString()}
+- iframe 可内嵌：${results.frame}
+- iframe 内登录：${results.login}
+- 响应头证据：${results.headers.length ? results.headers.join('；') : '未记录'}
+- 备注：${(results.notes.join('；') || '无')}
+- 推选路线：${document.getElementById('v-route').textContent}
+`;
+  document.getElementById('out').value = md;
+  navigator.clipboard && navigator.clipboard.writeText(md);
+  log('结果已生成并尝试复制到剪贴板', 'ok');
+}
+document.querySelectorAll('input[type=checkbox], input[type=text]').forEach(el => el.addEventListener('change', updateVerdict));
+log('就绪。先点上方预设或粘贴播放页地址，然后点「开始内嵌测试」', 'ok');
+</script>
+</body>
+</html>
