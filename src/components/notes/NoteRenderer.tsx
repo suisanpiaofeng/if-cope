@@ -7,6 +7,7 @@
 import dynamic from "next/dynamic";
 import { Markdown } from "@/components/Markdown";
 import type { QaCite } from "@/lib/qaCanvasTypes";
+import { qaMapToMarkdown, type QaMapData } from "@/lib/qaMapTypes";
 
 const MindMap = dynamic(() => import("./MindMap"), {
   ssr: false,
@@ -45,9 +46,23 @@ export default function NoteRenderer({
       return <QACanvas content={content} onCite={onCite} />;
     case "translation":
       return <TranslationView content={content} />;
+    case "qa-map":
+      return <QaMapView content={content} />;
     default:
       return null;
   }
+}
+
+/** 知识地图（JSON）在工作台的整齐渲染：按卡片层级拼成结构化 markdown */
+function QaMapView({ content }: { content: string }) {
+  let text = content;
+  try {
+    const map = JSON.parse(content) as QaMapData;
+    if (Array.isArray(map.nodes) && map.nodes.length) text = qaMapToMarkdown(map);
+  } catch {
+    /* 解析失败按原文显示 */
+  }
+  return <Markdown text={text} />;
 }
 
 /** 翻译产物（JSON）在工作台的轻量渲染：拼成可读的原文/译文 markdown */

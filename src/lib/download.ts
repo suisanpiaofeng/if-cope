@@ -1,4 +1,6 @@
-/** 产物下载：拉取内容 → Blob → 保存（.md；qa-canvas 存 .json；translation 重组为对照 .md） */
+import { qaMapToMarkdown, type QaMapData } from "./qaMapTypes";
+
+/** 产物下载：拉取内容 → Blob → 保存（.md；qa-canvas 存 .json；translation/qa-map 重组为可读 .md） */
 export async function downloadArtifact(id: number, title: string): Promise<void> {
   const res = await fetch(`/api/artifacts/${id}`);
   if (!res.ok) throw new Error(`获取产物失败（HTTP ${res.status}）`);
@@ -10,6 +12,12 @@ export async function downloadArtifact(id: number, title: string): Promise<void>
   if (d.type === "qa-canvas") {
     ext = "json";
     mime = "application/json;charset=utf-8";
+  } else if (d.type === "qa-map") {
+    try {
+      body = qaMapToMarkdown(JSON.parse(content) as QaMapData);
+    } catch {
+      /* 解析失败下载原始内容 */
+    }
   } else if (d.type === "translation") {
     // 把对照 JSON 重组成可读 markdown 再下载
     try {
