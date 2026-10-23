@@ -198,33 +198,28 @@ export default function SolvePage() {
     [active, patchActive]
   );
 
-  // ── 受控节点：全量应用变化（position + dimensions 测量值，缺一不可）。
-  //    只应用 position 会让 RF 算不出节点尺寸 → 连线不渲染（历史 bug）；
-  //    不接 onNodesChange 则拖动状态冲突卡片消失（更早的 bug） ──
+  // ── 受控节点：只应用拖动 position（实时跟手，不落库）。
+  //    不接 onNodesChange 拖动会让卡片消失（历史 bug）；
+  //    dimensions 事件绝不回写 state —— 回写会形成「测量→回写→重测」死循环，
+  //    导致 fit 被疯狂调用（本 bug 根因），且卡片尺寸本由自身 style 控制 ──
   const onNodesChange = useCallback(
     (changes: NodeChange<QaMapRFNode>[]) => {
+      const posById = new Map<string, { x: number; y: number }>();
+      for (const c of changes) {
+        if (c.type === "position" && c.position) posById.set(c.id, c.position);
+      }
+      if (posById.size === 0) return;
       setTabs((prev) =>
         prev.map((t) => {
           const key = activeKey || prev[0].key;
           if (t.key !== key) return t;
-          const posById = new Map<string, { x: number; y: number }>();
-          const dimById = new Map<string, { width?: number; height?: number }>();
-          for (const c of changes) {
-            if (c.type === "position" && c.position) posById.set(c.id, c.position);
-            else if (c.type === "dimensions" && c.dimensions) dimById.set(c.id, c.dimensions);
-          }
-          const next = t.nodes.map((n) => {
-            const pos = posById.get(n.id);
-            const dim = dimById.get(n.id);
-            return {
-              ...n,
-              x: pos?.x ?? n.x,
-              y: pos?.y ?? n.y,
-              w: dim?.width || n.w,
-              h: dim?.height || n.h,
-            };
-          });
-          return { ...t, nodes: next };
+          return {
+            ...t,
+            nodes: t.nodes.map((n) => {
+              const pos = posById.get(n.id);
+              return pos ? { ...n, x: pos.x, y: pos.y } : n;
+            }),
+          };
         })
       );
     },
@@ -400,12 +395,44 @@ export default function SolvePage() {
   const ready = sources.filter((s) => s.status === "ready");
   const attachNode = active?.selectedId ? active.nodes.find((n) => n.id === active.selectedId) : null;
 
-  // ── 切换/打开地图后视口自动适配（否则卡片可能在屏幕外，看起来像“不显示”） ──
+  // ── 打开/切换地图后视口自适配：不信任 RF 内置 fitView（它对本项目算出过
+  //    scale(0.31) 卡片缩成看不清的黑盒结果），改为自算：节点包围盒 ÷ 画布真实 DOM 尺寸
+  //    → setViewport；150/600ms 双时机兜底 ──
   const rfInstanceRef = useRef<ReactFlowInstance<QaMapRFNode, Edge> | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const fitActive = useCallback(() => {
+    const now = Date.now();
+    if (now - lastFitRef.current < 250) return; // 防抖：杜绝任何路径下的狂调
+    lastFitRef.current = now;
+    const nodes = active?.nodes ?? [];
+    const inst = rfInstanceRef.current;
+    const box = canvasRef.current;
+    if (!inst || !box || nodes.length === 0) return;
+    const minX = Math.min(...nodes.map((n) => n.x));
+    const minY = Math.min(...nodes.map((n) => n.y));
+    const maxX = Math.max(...nodes.map((n) => n.x + (n.w ?? 340)));
+    const maxY = Math.max(...nodes.map((n) => n.y + (n.h ?? 280)));
+    const boxW = Math.max(maxX - minX, 1);
+    const boxH = Math.max(maxY - minY, 1);
+    const rect = box.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return;
+    // 下限 0.4：分屏/极小窗口下也不缩成看不清的糊团（宁可溢出可拖动）
+    const zoom = Math.min(Math.max(Math.min((rect.width - 80) / boxW, (rect.height - 140) / boxH), 0.4), 1);
+    const x = (rect.width - boxW * zoom) / 2 - minX * zoom;
+    const y = (rect.height - boxH * zoom) / 2 - minY * zoom;
+    void inst.setViewport({ x, y, zoom }, { duration: 300 });
+  }, [active]);
+  const fitActiveRef = useRef(fitActive);
+  fitActiveRef.current = fitActive;
+  const lastFitRef = useRef(0);
   useEffect(() => {
-    const t = setTimeout(() => rfInstanceRef.current?.fitView({ duration: 350, padding: 0.15 }), 80);
-    return () => clearTimeout(t);
-  }, [activeKey, active?.mapId, active?.nodes.length]);
+    const t1 = setTimeout(() => fitActiveRef.current(), 150);
+    const t2 = setTimeout(() => fitActiveRef.current(), 600);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [activeKey, active?.mapId]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-white">
@@ -564,7 +591,7 @@ export default function SolvePage() {
 
         {/* 画布 + 右侧预览 */}
         <div className="flex min-h-0 flex-1">
-          <div className="relative min-w-0 flex-1">
+          <div ref={canvasRef} className="relative min-w-0 flex-1">
             {(active?.nodes.length ?? 0) === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <div className="max-w-[420px] text-center">
@@ -589,13 +616,21 @@ export default function SolvePage() {
                   patchActive({ selectedId: null }, false);
                   setSelectedEdge(null);
                 }}
-                fitView
                 minZoom={0.1}
                 nodesDraggable
                 nodesConnectable
               >
+                <div className="pointer-events-none absolute inset-0 z-[6] flex items-end justify-end p-3">
+                  <button
+                    onClick={() => fitActive()}
+                    title="适配全部卡片"
+                    className="pointer-events-auto rounded-md border border-neutral-300 bg-white px-2 py-1 text-[11px] text-neutral-600 shadow hover:bg-neutral-50"
+                  >
+                    ⛶ 回到视图
+                  </button>
+                </div>
                 <Background gap={20} size={1} color="#ececec" />
-                <Controls showInteractive={false} />
+                <Controls showInteractive={false} showFitView={false} />
                 {/* 连线层：自绘 SVG（RF 边管道不可靠，自绘稳定且可交互） */}
                 <EdgesOverlay
                   nodes={active?.nodes ?? []}
