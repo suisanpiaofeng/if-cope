@@ -27,3 +27,22 @@ export type TranslationDoc = {
   truncated?: boolean;
   translatedAt: number;
 };
+
+/** PDF 保真翻译（pdf2zh）：原版排版保留的双语/译文 PDF */
+export type PdfTranslationDoc = {
+  kind: "pdf";
+  sourceId: number;
+  sourceTitle: string;
+  /** 双语对照版 PDF（相对 data/translations 的路径） */
+  dualPdf: string;
+  /** 纯译文版 PDF */
+  monoPdf?: string;
+  model: string;
+  engine: "pdf2zh";
+  translatedAt: number;
+};
+
+export type AnyTranslationDoc = TranslationDoc | PdfTranslationDoc;
+export function isPdfDoc(d: AnyTranslationDoc | null | undefined): d is PdfTranslationDoc {
+  return !!d && (d as PdfTranslationDoc).kind === "pdf";
+}
