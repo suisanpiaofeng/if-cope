@@ -25,6 +25,9 @@ export type QaMapNode = {
   citations?: QaMapCite[];
   x: number;
   y: number;
+  /** 卡片尺寸（可拖边框调整） */
+  w?: number;
+  h?: number;
 };
 
 export type QaMapData = {
@@ -44,19 +47,21 @@ export function ancestorChain(nodes: QaMapNode[], nodeId: string | null): QaMapN
   return chain;
 }
 
-/** 追问的新节点应放的位置：父卡片右下方，避开已有节点 */
+/** 新节点落位：追问→父卡右下方纵向堆叠；新话题→最右开新列（自动布局，免手动找空位） */
 export function nextNodePosition(
   nodes: QaMapNode[],
   parentId: string | null
 ): { x: number; y: number } {
-  const parent = parentId ? nodes.find((n) => n.id === parentId) : null;
-  const base = parent ?? nodes[nodes.length - 1];
-  if (!base) return { x: 80, y: 80 };
-  const siblings = nodes.filter((n) => n.parentId === parentId).length;
-  return {
-    x: parent ? parent.x + 380 : base.x + 380,
-    y: parent ? base.y + siblings * 320 - 80 : base.y,
-  };
+  if (parentId) {
+    const parent = nodes.find((n) => n.id === parentId);
+    if (parent) {
+      const siblings = nodes.filter((n) => n.parentId === parentId);
+      return { x: parent.x + (parent.w ?? 340) + 90, y: parent.y + siblings.length * 320 };
+    }
+  }
+  if (nodes.length === 0) return { x: 60, y: 60 };
+  const maxX = Math.max(...nodes.map((n) => n.x + (n.w ?? 340)));
+  return { x: maxX + 90, y: 60 };
 }
 
 /** 单张卡片 → markdown（归档到知识库用） */
