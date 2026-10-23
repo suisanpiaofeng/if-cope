@@ -1,15 +1,16 @@
 "use client";
 
 /** 共享 Markdown 渲染器（预览区 / 知识地图卡片共用）：标题/列表/表格/引用/代码高亮 */
-import React from "react";
+import React, { memo } from "react";
 
-export function Markdown({ text }: { text: string }) {
+/** memo：拖动/重渲染时卡片正文相同则跳过重新解析（性能关键路径） */
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="markdown mx-auto max-w-[760px] text-sm leading-7 text-neutral-700">
       {renderBlocks(text)}
     </div>
   );
-}
+});
 
 function renderBlocks(src: string): React.ReactNode[] {
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
@@ -237,8 +238,8 @@ function highlightLine(line: string, lang: string): string {
   });
 }
 
-/** 带行号和语法高亮的代码块 */
-export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
+/** 带行号和语法高亮的代码块（memo 同 Markdown） */
+export const CodeBlock = memo(function CodeBlock({ code, lang }: { code: string; lang?: string }) {
   const l = langOf(lang ?? "");
   const lines = code.replace(/\r\n?/g, "\n").split("\n");
   return (
@@ -267,4 +268,4 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }) {
       </pre>
     </div>
   );
-}
+});

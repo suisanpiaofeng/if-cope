@@ -18,10 +18,6 @@ export const NOTE_KINDS: NoteKindMeta[] = [
   { kind: "quiz", label: "测验", icon: "❓", ext: "md" },
 ];
 
-export function noteKindMeta(kind: string | null | undefined): NoteKindMeta {
-  return NOTE_KINDS.find((k) => k.kind === kind) ?? NOTE_KINDS[0];
-}
-
 export function isNoteKind(v: unknown): v is NoteKind {
   return typeof v === "string" && NOTE_KINDS.some((k) => k.kind === v);
 }

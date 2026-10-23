@@ -9,6 +9,7 @@ import { retrieve, buildContextBlocks } from "@/lib/retrieval";
 import { estimateTokens } from "@/lib/embed";
 import { modelEndpoint, modelHeaders } from "@/lib/modelGateway";
 import {
+  ancestorChain,
   nextNodePosition,
   type QaMapData,
   type QaMapCite,
@@ -73,13 +74,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 追问链上下文 ──
-    const byId = new Map((map?.nodes ?? []).map((n) => [n.id, n]));
-    const chain: QaMapNode[] = [];
-    let cur = parentId ? byId.get(parentId) : undefined;
-    while (cur) {
-      chain.unshift(cur);
-      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-    }
+    const chain = map ? ancestorChain(map.nodes, parentId ?? null) : [];
 
     // ── 检索资料（指定资源优先；否则全部可用） ──
     const readyIds = (db.prepare("SELECT id FROM sources WHERE status = 'ready'").all() as { id: number }[]).map(

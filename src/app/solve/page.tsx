@@ -26,7 +26,6 @@ import { DND_MIME, readDnd } from "@/lib/dnd";
 import {
   nextNodePosition,
   normalizeQaMap,
-  qaCardToMarkdown,
   qaMapToMarkdown,
   type QaMapData,
   type QaMapNode,

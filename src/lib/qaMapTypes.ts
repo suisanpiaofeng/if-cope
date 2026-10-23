@@ -108,15 +108,6 @@ export function normalizeQaMap(raw: unknown): QaMapData | null {
   return { title: String(obj.title ?? "").trim().slice(0, 60) || "导入的知识地图", nodes };
 }
 
-/** 单张卡片 → markdown（归档到知识库用） */
-export function qaCardToMarkdown(node: QaMapNode): string {
-  const lines = [`# ${node.title}`, "", `**提问**：${node.question}`, "", node.answer, ""];
-  for (const c of node.citations ?? []) {
-    lines.push(`📎 出处：${c.title} #${c.sourceId}${c.page != null ? ` 第${c.page}页` : ""}${c.quote ? `（"${c.quote}"）` : ""}`);
-  }
-  return lines.join("\n");
-}
-
 /** 整张地图 → markdown（导出用） */
 export function qaMapToMarkdown(map: QaMapData): string {
   const byParent = new Map<string | null, QaMapNode[]>();
