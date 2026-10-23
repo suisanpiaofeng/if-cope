@@ -15,11 +15,12 @@ import {
   type Edge,
   type NodeChange,
   type OnNodeDrag,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import Sidebar from "@/components/Sidebar";
 import QAMapCard, { type QaMapRFNode } from "@/components/qa-map/QAMapCard";
-import RelEdge from "@/components/qa-map/RelEdge";
+import EdgesOverlay from "@/components/qa-map/EdgesOverlay";
 import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
 import { DND_MIME, readDnd } from "@/lib/dnd";
 import {
@@ -33,7 +34,6 @@ import {
 import type { Source } from "@/lib/types";
 
 const nodeTypes = { qaCard: QAMapCard };
-const edgeTypes = { relEdge: RelEdge };
 
 type MapTab = {
   key: string;
@@ -199,20 +199,33 @@ export default function SolvePage() {
     [active, patchActive]
   );
 
-  // ── 受控拖动：实时同步节点位置（不落库），拖完 onNodeDragStop 保存。
-  //    不接 onNodesChange 会在拖动/缩放时状态冲突导致卡片消失（历史 bug） ──
+  // ── 受控节点：全量应用变化（position + dimensions 测量值，缺一不可）。
+  //    只应用 position 会让 RF 算不出节点尺寸 → 连线不渲染（历史 bug）；
+  //    不接 onNodesChange 则拖动状态冲突卡片消失（更早的 bug） ──
   const onNodesChange = useCallback(
     (changes: NodeChange<QaMapRFNode>[]) => {
       setTabs((prev) =>
         prev.map((t) => {
-          if (t.key !== activeKey) return t;
-          let next = t.nodes;
+          const key = activeKey || prev[0].key;
+          if (t.key !== key) return t;
+          const posById = new Map<string, { x: number; y: number }>();
+          const dimById = new Map<string, { width?: number; height?: number }>();
           for (const c of changes) {
-            if (c.type === "position" && c.position) {
-              next = next.map((n) => (n.id === c.id ? { ...n, x: c.position!.x, y: c.position!.y } : n));
-            }
+            if (c.type === "position" && c.position) posById.set(c.id, c.position);
+            else if (c.type === "dimensions" && c.dimensions) dimById.set(c.id, c.dimensions);
           }
-          return next === t.nodes ? t : { ...t, nodes: next };
+          const next = t.nodes.map((n) => {
+            const pos = posById.get(n.id);
+            const dim = dimById.get(n.id);
+            return {
+              ...n,
+              x: pos?.x ?? n.x,
+              y: pos?.y ?? n.y,
+              w: dim?.width || n.w,
+              h: dim?.height || n.h,
+            };
+          });
+          return { ...t, nodes: next };
         })
       );
     },
@@ -385,23 +398,15 @@ export default function SolvePage() {
     [active, busyKey, onFollowUp, onCite, onDelete, onResize, onResizeEnd]
   );
 
-  const rfEdges = useMemo<Edge[]>(
-    () =>
-      (active?.nodes ?? [])
-        .filter((n) => n.parentId)
-        .map((n) => ({
-          id: `${n.parentId}-${n.id}`,
-          source: n.parentId!,
-          target: n.id,
-          type: "relEdge",
-          data: { relation: n.relation ?? "追问" },
-          selected: selectedEdge?.nodeId === n.id,
-        })),
-    [active, selectedEdge]
-  );
-
   const ready = sources.filter((s) => s.status === "ready");
   const attachNode = active?.selectedId ? active.nodes.find((n) => n.id === active.selectedId) : null;
+
+  // ── 切换/打开地图后视口自动适配（否则卡片可能在屏幕外，看起来像“不显示”） ──
+  const rfInstanceRef = useRef<ReactFlowInstance<QaMapRFNode, Edge> | null>(null);
+  useEffect(() => {
+    const t = setTimeout(() => rfInstanceRef.current?.fitView({ duration: 350, padding: 0.15 }), 80);
+    return () => clearTimeout(t);
+  }, [activeKey, active?.mapId, active?.nodes.length]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-white">
@@ -575,15 +580,10 @@ export default function SolvePage() {
             ) : (
               <ReactFlow
                 nodes={rfNodes}
-                edges={rfEdges}
                 nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
+                onInit={(i) => (rfInstanceRef.current = i)}
                 onNodesChange={onNodesChange}
                 onConnect={onConnect}
-                onEdgeClick={(_e, edge) => {
-                  const child = active.nodes.find((n) => `${n.parentId}-${n.id}` === edge.id);
-                  if (child) setSelectedEdge({ nodeId: child.id, relation: child.relation ?? "追问" });
-                }}
                 onNodeDragStop={onNodeDragStop}
                 onNodeClick={(_e, n) => patchActive({ selectedId: n.id }, false)}
                 onPaneClick={() => {
@@ -594,10 +594,18 @@ export default function SolvePage() {
                 minZoom={0.1}
                 nodesDraggable
                 nodesConnectable
-                edgesFocusable={false}
               >
                 <Background gap={20} size={1} color="#ececec" />
                 <Controls showInteractive={false} />
+                {/* 连线层：自绘 SVG（RF 边管道不可靠，自绘稳定且可交互） */}
+                <EdgesOverlay
+                  nodes={active?.nodes ?? []}
+                  selectedEdgeId={selectedEdge?.nodeId}
+                  onEdgeClick={(childId) => {
+                    const child = active.nodes.find((n) => n.id === childId);
+                    if (child) setSelectedEdge({ nodeId: child.id, relation: child.relation ?? "追问" });
+                  }}
+                />
               </ReactFlow>
             )}
 
