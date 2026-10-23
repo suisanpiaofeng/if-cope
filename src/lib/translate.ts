@@ -6,17 +6,9 @@
 import db, { getSettings, isModelConfigured, recordUsage, getAigcCategoryId } from "./db";
 import { estimateTokens } from "./embed";
 import { modelEndpoint, modelHeaders } from "./modelGateway";
+import type { TranslateSegment, TranslationDoc } from "./types";
 
-export type TranslateSegment = { page: number | null; heading: string; src: string; trg: string };
-
-export type TranslationDoc = {
-  sourceId: number;
-  sourceTitle: string;
-  model: string;
-  segments: TranslateSegment[];
-  truncated?: boolean;
-  translatedAt: number;
-};
+export type { TranslateSegment, TranslationDoc } from "./types";
 
 const BATCH = 8;          // 每批送模型的段落数（约 4k 字输入，稳妥不超时）
 const MAX_SEGMENTS = 160; // 单篇上限（约 8 万字），超出截断并在产物标注

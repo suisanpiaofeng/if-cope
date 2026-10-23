@@ -16,3 +16,14 @@ export type Source = {
   chunk_count: number;
   created_at: number;
 };
+
+/** 文献翻译：段落（按已解析块，带页码）与翻译产物 */
+export type TranslateSegment = { page: number | null; heading: string; src: string; trg: string };
+export type TranslationDoc = {
+  sourceId: number;
+  sourceTitle: string;
+  model: string;
+  segments: TranslateSegment[];
+  truncated?: boolean;
+  translatedAt: number;
+};
