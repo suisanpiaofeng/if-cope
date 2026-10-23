@@ -27,6 +27,21 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
   const n = data.node;
   const [asking, setAsking] = useState(false);
   const [text, setText] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+
+  // 外部点击自动收起（草稿保留在 text，重开原样恢复）；
+  // 点「从这里追问」按钮交给按钮自身切换；组件卸载（切页/切地图）时草稿自然释放
+  useEffect(() => {
+    if (!asking) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement;
+      if (boxRef.current?.contains(t) || toggleRef.current?.contains(t)) return;
+      setAsking(false);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [asking]);
   const resizeRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // 拖右下角调大小
@@ -143,6 +158,7 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
             删除
           </button>
           <button
+            ref={toggleRef}
             onClick={(e) => {
               e.stopPropagation();
               setAsking((v) => !v);
@@ -154,9 +170,10 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
         </div>
       </div>
 
-      {/* 追问小框（卡片下方弹出） */}
+      {/* 追问小框（卡片下方弹出；外部点击收起但保留草稿） */}
       {asking && (
         <div
+          ref={boxRef}
           className="nodrag absolute left-0 top-full z-10 mt-1 w-full rounded-lg border border-neutral-300 bg-white p-2 shadow-lg"
           onClick={(e) => e.stopPropagation()}
         >
@@ -175,9 +192,6 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
             className="w-full resize-none rounded border border-neutral-200 px-2 py-1.5 text-[11px] outline-none focus:border-neutral-400"
           />
           <div className="mt-1 flex justify-end gap-1.5">
-            <button onClick={() => setAsking(false)} className="rounded px-2 py-0.5 text-[10px] text-neutral-400 hover:text-neutral-700">
-              取消
-            </button>
             <button
               onClick={submit}
               disabled={!text.trim() || data.busy}
