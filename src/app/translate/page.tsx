@@ -35,48 +35,6 @@ function looksEnglish(s: Source): boolean {
   return latin >= 4 && latin / Math.max(s.title.length, 1) > 0.35;
 }
 
-async function streamTranslate(
-  sourceId: number,
-  onProgress: (done: number, total: number) => void
-): Promise<{ artifactId: number; truncated?: boolean }> {
-  const res = await fetch("/api/translate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sourceId }),
-  });
-  if (!res.ok) {
-    const d = await res.json().catch(() => ({}) as { error?: string });
-    throw new Error(d.error || `HTTP ${res.status}`);
-  }
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("无法读取翻译流");
-  const dec = new TextDecoder();
-  let buf = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    const chunks = buf.split("\n\n");
-    buf = chunks.pop() ?? "";
-    for (const raw of chunks) {
-      const line = raw.trim();
-      if (!line.startsWith("data:")) continue;
-      const evt = JSON.parse(line.slice(5)) as {
-        type: string;
-        done?: number;
-        total?: number;
-        artifactId?: number;
-        truncated?: boolean;
-        message?: string;
-      };
-      if (evt.type === "progress") onProgress(evt.done ?? 0, evt.total ?? 0);
-      else if (evt.type === "done") return { artifactId: evt.artifactId!, truncated: evt.truncated };
-      else if (evt.type === "error") throw new Error(evt.message || "翻译失败");
-    }
-  }
-  throw new Error("翻译流意外中断");
-}
-
 export default function TranslatePage() {
   const [sources, setSources] = useState<Source[]>([]);
   const [picked, setPicked] = useState<Set<number>>(new Set());
@@ -102,9 +60,9 @@ export default function TranslatePage() {
     loadHistory();
   }, [loadHistory]);
 
-  /** 可翻译：已解析且有文本 */
+  /** 可翻译：仅 PDF（本功能只做保真双语翻译；文件可用性由服务端校验） */
   const translatable = useMemo(
-    () => sources.filter((s) => s.status === "ready" && s.chunk_count > 0),
+    () => sources.filter((s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf"),
     [sources]
   );
   const englishPicks = translatable.filter(looksEnglish);
@@ -125,33 +83,21 @@ export default function TranslatePage() {
   const runOne = useCallback(
     async (s: Source) => {
       const key = `t${Date.now().toString(36)}${tabSeq++}`;
-      const pdfMode = s.ext.toLowerCase() === "pdf";
       setTabs((prev) => [
         ...prev,
-        { key, artifactId: null, sourceId: s.id, title: s.title, status: "translating", progress: { done: 0, total: 0 }, doc: null, pdfMode },
+        { key, artifactId: null, sourceId: s.id, title: s.title, status: "translating", progress: { done: 0, total: 0 }, doc: null, pdfMode: true },
       ]);
       setActiveKey(key);
       try {
         // PDF → pdf2zh 保真翻译（保留原版排版，产出双语/译文两份 PDF）
-        if (pdfMode) {
-          const res = await fetch("/api/translatePdf", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sourceId: s.id }),
-          });
-          const d = (await res.json()) as { error?: string; artifactId?: number; doc?: AnyTranslationDoc };
-          if (!res.ok || !d.doc || d.artifactId == null) throw new Error(d.error || `HTTP ${res.status}`);
-          patchTab(key, { status: "done", artifactId: d.artifactId, doc: d.doc });
-          loadHistory();
-          return;
-        }
-        // 非 PDF → 分段文本对照翻译（SSE 进度）
-        const { artifactId } = await streamTranslate(s.id, (done, total) =>
-          patchTab(key, { progress: { done, total } })
-        );
-        const art = await fetch(`/api/artifacts/${artifactId}`).then((r) => r.json());
-        const doc = JSON.parse(art.content) as TranslationDoc;
-        patchTab(key, { status: "done", artifactId, doc, progress: { done: doc.segments.length, total: doc.segments.length } });
+        const res = await fetch("/api/translatePdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sourceId: s.id }),
+        });
+        const d = (await res.json()) as { error?: string; artifactId?: number; doc?: AnyTranslationDoc };
+        if (!res.ok || !d.doc || d.artifactId == null) throw new Error(d.error || `HTTP ${res.status}`);
+        patchTab(key, { status: "done", artifactId: d.artifactId, doc: d.doc });
         loadHistory();
       } catch (e) {
         patchTab(key, { status: "error", error: e instanceof Error ? e.message : String(e) });
