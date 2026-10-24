@@ -22,7 +22,7 @@ src/
 │  ├─ solve/page.tsx           解题答疑·知识地图工作区（React Flow 画布）
 │  ├─ translate/page.tsx       文献翻译（仅 PDF，双栏对照，多标签）
 │  ├─ settings/page.tsx        设置（对话/翻译模型分接口、Key 遮罩）
-│  ├─ tools/page.tsx           工具库（dynamic 按需加载）
+│  ├─ tools/page.tsx           工具库入口（server 壳 + Suspense，主体在 components/tools/ToolsClient.tsx）
 │  └─ api/                     chat sources categories artifacts settings
 │                              organize(整理) ask(知识地图检索) lookup(离线网页)
 │                              preview(二进制流/EPUB) translatePdf translations/[id]
@@ -41,6 +41,7 @@ src/
    ├─ parse/                   file.ts pdf.ts audio.ts pptx.ts epub.ts
    ├─ localEmbed.ts            FastEmbed 单例（bge-small-zh-v1.5，**512 维**）
    ├─ webSearch.ts             时效触发判定 + DuckDuckGo/百度双源搜索 + 超时合并
+   ├─ tools/registry.ts        工具库注册表（ToolDef 元数据 + 懒加载，客户端可安全 import）
    └─ embed.ts                 OpenAI 兼容 API 嵌入（优先 providers 增强链）
 ```
 
@@ -84,7 +85,16 @@ src/
 - 历史文本翻译产物仍可查看/下载（渲染兼容保留）；分段文本翻译管线已删除。
 
 ### 3.5 工具库 / 设置 / 用量
-- 工具库全部 dynamic 按需加载；音频转文字复用 `withAsr`（用完即释放）。
+- 工具库 `/tools`（42 个工具，纯本地不上传）：**registry 注册表架构**（学习 it-tools）。
+  `src/lib/tools/registry.ts` 存 `ToolDef`（id/name/desc/category/keywords/懒加载 `load`），
+  页面 `ToolsClient.tsx` 提供搜索（名称+关键词）/ 可折叠分类 / 收藏(localStorage) / 最近使用 /
+  URL 深链 `?tool=<id>`。**新增工具 = 写一个 `src/components/tools/Xxx.tsx` + registry 加一行**；
+  共享 UI 原语在 `src/components/tools/_ui.tsx`（按钮/输入/输出/复制等，统一中性灰风格）。
+  每个工具 `load: () => import(...)` 独立懒加载、切换即卸载（守内存纪律）。
+- 9 大分类：文本/编码/开发/数据/图片/PDF/时间/生活/安全。批1 纯 JS 零依赖（UUID/密码/Hash/进制/
+  Diff/JWT/单位时区换算等），批2 轻依赖（JSON↔YAML/TOML/CSV/转代码/对比、PDF 拆分旋转转图、
+  图片改尺寸/裁剪/取色、Markdown 编辑）。新增依赖仅 `js-yaml`+`smol-toml`（纯 JS，已纳入 postinstall 裁剪 sourcemap）。
+- **PDF 转图片**用 pdfjs 客户端渲染 canvas，worker 走 `public/pdf.worker.min.mjs`（已随仓库）。
 - 设置：**对话与翻译模型分接口**；providers 多接口（含火山 Ark v4+AK-SK 签名、
   CVStudio、New API、自定义）；用量探针四种模板 + 用量条 + 自测。
 

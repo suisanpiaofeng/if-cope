@@ -67,6 +67,12 @@ if (existsSync(mermaidDist)) {
   stripMaps(mermaidDist, readdirSync(mermaidDist));
 }
 
+// ── js-yaml / smol-toml：只删 sourcemap（.map 不参与运行，浏览器构建保留不误伤 webpack 解析）──
+for (const pkg of ["js-yaml", "smol-toml"]) {
+  const dir = path.join(nm, pkg);
+  if (existsSync(dir)) stripMaps(dir, readdirSync(dir));
+}
+
 if (saved > 0) {
   console.log(`[trim-heavy-deps] 已裁剪无用发行产物，释放 ${(saved / 1024 / 1024).toFixed(0)} MB`);
 }

@@ -11,7 +11,7 @@
 | **快捷功能条** | 对话输入框上方：复习笔记 / 思维导图 / 流程图 / 大纲 / 测验 / 整理资源 / 解题答疑，选中资源一键生成对应产物 |
 | **解题答疑（知识地图）** | `/solve`：AI 引导式提问 + React Flow 多地图工作区；卡片可拖动/调大小/追问小窗，引用抽屉预览原文，联网搜索（时效问题自动触发），导入导出 JSON/MD |
 | **文献翻译** | `/translate`：仅 PDF，pdf2zh 保真双语翻译（保留原版排版），左原版右纯译文逐页对照，双 PDF 下载；翻译模型独立接口可在设置页配置 |
-| **工具库** | 编解码 / 图片压缩 / 音频转文字(whisper) / PDF 处理 / 文本工具 / 二维码，均按需加载 |
+| **工具库** | `/tools`：42 个纯本地工具，带搜索 / 分类 / 收藏 / 最近使用 / URL 深链（`?tool=<id>`）。涵盖文本、编码、开发、数据、图片、PDF、时间、生活、安全 9 类——JSON↔YAML/TOML/CSV、JSON 转代码、文本 Diff、PDF 拆分/旋转/转图、图片改尺寸/裁剪/取色、Hash/JWT/密码、单位/时区换算等，全部按需加载 |
 | **设置 + 用量查询** | 对话与翻译模型分接口配置；供应商用量内置/New API/火山 AK-SK/通用模板四种探针 |
 
 ## 运行方式
@@ -42,7 +42,7 @@ PDF 保真翻译依赖 **PDFMathTranslate（pdf2zh）** CLI（uv 工具环境，
 | whisper（STT） | **用完即释放**：`parse/audio.ts` 的 `withAsr` 转写完立即 dispose |
 | fastembed（本地嵌入） | 常驻单例（检索热路径），模型在 `data/models/`，勿删 |
 | pdfjs / mammoth / jszip / @audio/decode | **懒加载**（`await import`），解析到对应格式才载入 |
-| 工具库 / 导图编辑器 | `next/dynamic` 按需加载 |
+| 工具库 / 导图编辑器 | 工具库 per-tool `() => import()` 懒加载，切换即卸载（42 个工具不进主包）；导图编辑器 `next/dynamic` |
 | markmap / mermaid（仅便签旧系列渲染用） | `next/dynamic` 按需加载，编辑器已用 React 原生实现不引库 |
 | onnxruntime | overrides 钉 1.30（避免嵌套多版本 ~208MB） |
 
