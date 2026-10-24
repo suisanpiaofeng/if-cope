@@ -1,6 +1,6 @@
 "use client";
 
-/** 百分比计算：X 的 Y% / 占比 / 变化率 / 折扣价，多场景一键算 */
+/** 百分比计算：X 的 Y% / 占比 / 变化率 / 减价，多场景一键算 */
 import { useState } from "react";
 import { Btn, NumInput } from "./_ui";
 
@@ -23,7 +23,6 @@ export default function PercentageCalculator() {
   const [x, setX] = useState<number>(NaN);
   const [y, setY] = useState<number>(NaN);
   const [p, setP] = useState<number>(NaN);
-  const [off, setOff] = useState<number>(NaN);
 
   const pct = (v: number) => (Number.isFinite(v) ? `${+v.toFixed(6)} %` : "—");
   const num = (v: number) => (Number.isFinite(v) ? Number(v.toPrecision(10)).toString() : "—");
@@ -39,13 +38,10 @@ export default function PercentageCalculator() {
       <Line label={<><NumInput value={x} onChange={setX} className="w-20" /> → <NumInput value={y} onChange={setY} className="w-20" /> 变化率</>}>
         <Val v={pct(x === 0 ? NaN : ((y - x) / Math.abs(x)) * 100)} />
       </Line>
-      <Line label={<><NumInput value={a} onChange={setA} className="w-24" /> 打 <NumInput value={off} onChange={setOff} className="w-16" /> 折（×{num(off / 10)}）</>}>
-        <Val v={num((a * off) / 10)} />
-      </Line>
       <Line label={<><NumInput value={a} onChange={setA} className="w-24" /> 减 <NumInput value={p} onChange={setP} className="w-20" />%</>}>
         <Val v={num(a * (1 - p / 100))} />
       </Line>
-      <div className="mt-3 text-[11px] text-neutral-400">改任一输入框即时重算；折=原价×折数÷10。</div>
+      <div className="mt-3 text-[11px] text-neutral-400">改任一输入框即时重算。</div>
     </div>
   );
 }
