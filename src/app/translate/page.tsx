@@ -254,11 +254,6 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
                       className="accent-neutral-900"
                     />
                     <span className="min-w-0 flex-1 truncate text-neutral-700">{s.title}</span>
-                    {s.ext === "pdf" ? (
-                      <span className="shrink-0 text-[10px] text-neutral-600" title="PDF：保真双语翻译（保留原版排版）">📄 保真</span>
-                    ) : (
-                      <span className="shrink-0 text-[10px] text-neutral-400">.{s.ext}</span>
-                    )}
                     {en && <span className="shrink-0 text-[10px]" title="疑似英文文献">🌐</span>}
                   </label>
                 );
