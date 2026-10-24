@@ -63,7 +63,7 @@ export default function UnitConverter() {
   const [catIdx, setCatIdx] = useState(0);
   const [from, setFrom] = useState(0);
   const [to, setTo] = useState(1);
-  const [value, setValue] = useState("1");
+  const [value, setValue] = useState("");
 
   const cat = CATS[catIdx];
   const fromU = cat.units[from];

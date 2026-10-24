@@ -9,7 +9,7 @@ type Dir = "json2yaml" | "yaml2json";
 
 export default function JsonYaml() {
   const [dir, setDir] = useState<Dir>("json2yaml");
-  const [input, setInput] = useState('{\n  "name": "IF.Cope",\n  "tools": 28,\n  "tags": ["学习", "AI"]\n}');
+  const [input, setInput] = useState("");
   const [error, setError] = useState("");
 
   const output = useMemo(() => {

@@ -48,7 +48,7 @@ function goType(v: unknown, depth = 0): string {
 
 export default function JsonToCode() {
   const [target, setTarget] = useState<Target>("ts");
-  const [input, setInput] = useState('{\n  "id": 1,\n  "name": "IF.Cope",\n  "enabled": true,\n  "score": 95.5,\n  "tags": ["学习", "AI"],\n  "owner": { "uid": 1001, "email": "a@b.com" }\n}');
+  const [input, setInput] = useState("");
   const [error, setError] = useState("");
 
   const out = useMemo(() => {

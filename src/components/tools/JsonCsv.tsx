@@ -55,7 +55,7 @@ export function objectsToCsv(arr: Record<string, unknown>[], delim = ","): strin
 export default function JsonCsv() {
   const [dir, setDir] = useState<Dir>("json2csv");
   const [delim, setDelim] = useState<"," | ";" | "\t">(",");
-  const [input, setInput] = useState('[\n  { "id": 1, "name": "张三", "score": 95 },\n  { "id": 2, "name": "李四", "score": 88 }\n]');
+  const [input, setInput] = useState("");
   const [error, setError] = useState("");
 
   const output = useMemo(() => {

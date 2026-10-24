@@ -10,7 +10,7 @@ const SAMPLE = `# Markdown 编辑器\n\n左编辑、右预览，**实时**渲染
 
 export default function MarkdownEditor() {
   const mounted = useMounted();
-  const [text, setText] = useState(SAMPLE);
+  const [text, setText] = useState("");
   const [draftLoaded, setDraftLoaded] = useState(false);
 
   useEffect(() => {

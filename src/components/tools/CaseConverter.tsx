@@ -28,7 +28,7 @@ const CASES: { key: string; name: string; fn: (w: string[]) => string }[] = [
 function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
 export default function CaseConverter() {
-  const [input, setInput] = useState("hello world example");
+  const [input, setInput] = useState("");
   const results = useMemo(() => {
     if (!input.trim()) return [];
     const w = words(input);

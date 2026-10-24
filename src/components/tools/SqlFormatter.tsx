@@ -53,7 +53,7 @@ function formatSql(sql: string, upper: boolean): string {
 }
 
 export default function SqlFormatter() {
-  const [input, setInput] = useState("select u.id,u.name,count(o.id) as total from users u left join orders o on o.user_id=u.id where u.status='active' and o.created_at>='2026-01-01' group by u.id,u.name order by total desc limit 10");
+  const [input, setInput] = useState("");
   const [upper, setUpper] = useState(true);
   const [output, setOutput] = useState("");
 

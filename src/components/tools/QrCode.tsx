@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 
 export default function QrCode() {
-  const [text, setText] = useState("https://cvs.seu.edu.cn");
+  const [text, setText] = useState("");
   const [dataUrl, setDataUrl] = useState("");
   const [error, setError] = useState("");
 

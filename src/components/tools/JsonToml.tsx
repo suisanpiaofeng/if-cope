@@ -9,7 +9,7 @@ type Dir = "json2toml" | "toml2json";
 
 export default function JsonToml() {
   const [dir, setDir] = useState<Dir>("json2toml");
-  const [input, setInput] = useState('{\n  "title": "IF.Cope",\n  "version": "0.1.0",\n  "tools": 28\n}');
+  const [input, setInput] = useState("");
   const [error, setError] = useState("");
 
   const output = useMemo(() => {

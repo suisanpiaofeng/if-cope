@@ -29,7 +29,7 @@ function decodeHtml(s: string): string {
 }
 
 export default function HtmlEntities() {
-  const [input, setInput] = useState("<div class=\"box\">你好 & welcome</div>");
+  const [input, setInput] = useState("");
   const [mode, setMode] = useState<"encode" | "decode">("encode");
   const [hanAsNum, setHanAsNum] = useState(false);
 

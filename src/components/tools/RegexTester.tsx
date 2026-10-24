@@ -13,11 +13,12 @@ const TEMPLATES: [string, string, string][] = [
 ];
 
 export default function RegexTester() {
-  const [pattern, setPattern] = useState("\\d+");
+  const [pattern, setPattern] = useState("");
   const [flags, setFlags] = useState("g");
-  const [text, setText] = useState("2026-10-23，学号 21301234，手机 13800138000。");
+  const [text, setText] = useState("");
 
   const result = useMemo(() => {
+    if (!pattern || !text) return { matches: [], error: "" };
     try {
       const re = new RegExp(pattern, flags.includes("g") ? flags : flags + "g");
       const matches: { index: number; value: string }[] = [];

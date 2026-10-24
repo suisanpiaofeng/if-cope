@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { Btn, CopyBtn, Hint, Input } from "./_ui";
 
 export default function UrlParser() {
-  const [input, setInput] = useState("https://cvs.seu.edu.cn:443/view?id=123&page=2&tab=note#top");
+  const [input, setInput] = useState("");
   const parsed = useMemo(() => {
     try {
       if (!input.trim()) return null;

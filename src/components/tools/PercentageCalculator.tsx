@@ -18,12 +18,12 @@ function Val({ v }: { v: string }) {
 }
 
 export default function PercentageCalculator() {
-  const [a, setA] = useState(200);
-  const [b, setB] = useState(15);
-  const [x, setX] = useState(80);
-  const [y, setY] = useState(50);
-  const [p, setP] = useState(25);
-  const [off, setOff] = useState(30);
+  const [a, setA] = useState<number>(NaN);
+  const [b, setB] = useState<number>(NaN);
+  const [x, setX] = useState<number>(NaN);
+  const [y, setY] = useState<number>(NaN);
+  const [p, setP] = useState<number>(NaN);
+  const [off, setOff] = useState<number>(NaN);
 
   const pct = (v: number) => (Number.isFinite(v) ? `${+v.toFixed(6)} %` : "—");
   const num = (v: number) => (Number.isFinite(v) ? Number(v.toPrecision(10)).toString() : "—");

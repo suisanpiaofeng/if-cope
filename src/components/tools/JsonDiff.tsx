@@ -33,8 +33,8 @@ function walk(a: unknown, b: unknown, path: string, out: Change[]) {
 }
 
 export default function JsonDiff() {
-  const [a, setA] = useState('{\n  "name": "IF.Cope",\n  "tools": 28,\n  "tags": ["学习", "AI"]\n}');
-  const [b, setB] = useState('{\n  "name": "IF.Cope",\n  "tools": 43,\n  "author": "demo"\n}');
+  const [a, setA] = useState("");
+  const [b, setB] = useState("");
   const [ignoreOrder, setIgnoreOrder] = useState(true);
 
   const { changes, error } = useMemo(() => {
