@@ -40,7 +40,7 @@ export default function PercentageCalculator() {
         <Val v={pct(x === 0 ? NaN : ((y - x) / Math.abs(x)) * 100)} />
       </Line>
       <Line label={<><NumInput value={a} onChange={setA} className="w-24" /> 打 <NumInput value={off} onChange={setOff} className="w-16" /> 折（×{num(off / 10)}）</>}>
-        <Val v={num((a * off) / 100)} />
+        <Val v={num((a * off) / 10)} />
       </Line>
       <Line label={<><NumInput value={a} onChange={setA} className="w-24" /> 减 <NumInput value={p} onChange={setP} className="w-20" />%</>}>
         <Val v={num(a * (1 - p / 100))} />
