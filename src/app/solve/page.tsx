@@ -19,6 +19,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import Sidebar from "@/components/Sidebar";
+import UploadModal from "@/components/UploadModal";
 import QAMapCard, { type QaMapRFNode } from "@/components/qa-map/QAMapCard";
 import EdgesOverlay from "@/components/qa-map/EdgesOverlay";
 import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
@@ -64,6 +65,8 @@ export default function SolvePage() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [saveState, setSaveState] = useState("已保存");
   const [sources, setSources] = useState<Source[]>([]);
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const [contextIds, setContextIds] = useState<Set<number>>(new Set());
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [dropOver, setDropOver] = useState(false);
@@ -88,12 +91,19 @@ export default function SolvePage() {
       .then((d) => setHistory((d.artifacts ?? []).filter((a: { type: string }) => a.type === "qa-map")));
   }, []);
 
-  useEffect(() => {
-    loadHistory();
+  const loadSources = useCallback(() => {
     fetch("/api/sources")
       .then((r) => r.json())
-      .then((d) => setSources(d.sources ?? []));
-  }, [loadHistory]);
+      .then((d) => {
+        setSources(d.sources ?? []);
+        setCategories(d.categories ?? []);
+      });
+  }, []);
+
+  useEffect(() => {
+    loadHistory();
+    loadSources();
+  }, [loadHistory, loadSources]);
 
   const patchActive = useCallback(
     (partial: Partial<MapTab>, markDirty = true) => {
@@ -334,6 +344,43 @@ export default function SolvePage() {
     setActiveKey(t.key);
   }
 
+  /** 导入资料：上传/链接/文本入库，成功后刷新资源列表 */
+  async function doUpload(files: File[], categoryId: number | null) {
+    for (const f of files) {
+      const fd = new FormData();
+      fd.append("file", f);
+      if (categoryId != null) fd.append("categoryId", String(categoryId));
+      fd.append("type", "其他");
+      const res = await fetch("/api/sources", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) setError(data.error ?? `《${f.name}》上传失败`);
+      else if (data.duplicate) setNotice(data.message);
+    }
+    loadSources();
+  }
+
+  async function doAddLink(url: string, categoryId: number | null) {
+    const res = await fetch("/api/sources", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, categoryId: categoryId ?? undefined }),
+    });
+    const data = await res.json();
+    if (data.error) setError(data.error);
+    else if (data.duplicate) setNotice(data.message);
+    loadSources();
+  }
+
+  async function doAddText(text: string, categoryId: number | null) {
+    const res = await fetch("/api/sources", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, categoryId: categoryId ?? undefined }),
+    });
+    const data = await res.json();
+    if (data.error) setError(data.error);
+    else if (data.duplicate) setNotice(data.message);
+    loadSources();
+  }
+
   /** 导入知识地图（导出的 JSON）：校验 → 存为产物 → 新标签打开续写 */
   async function importMap(f: File | undefined) {
     if (!f) return;
@@ -475,7 +522,7 @@ export default function SolvePage() {
           <div className="text-[15px] font-semibold tracking-tight">解题答疑</div>
           <div className="mt-0.5 text-[11px] text-neutral-400">问答成卡片 · 追问成地图 · 沉淀知识库</div>
         </div>
-        <div className="flex-1 overflow-y-auto px-3 py-3">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 py-3">
           {error && (
             <div className="mb-2 border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{error}</div>
           )}
@@ -483,6 +530,8 @@ export default function SolvePage() {
             <div className="mb-2 border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-700">{notice}</div>
           )}
 
+          {/* 地图管理区：限高自滚 */}
+          <div className="max-h-[40%] shrink-0 overflow-y-auto">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
               我的知识地图 <span className="num">{history.length}</span>
@@ -517,18 +566,22 @@ export default function SolvePage() {
               ))
             )}
           </div>
+          </div>
 
           {/* 资源框：勾选或拖进对话框作依据 */}
-          <div className="mt-4">
+          <div className="mt-4 flex min-h-0 flex-1 flex-col">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
                 资源 <span className="num">{contextIds.size > 0 ? `依据 ${contextIds.size}` : "全部"}</span>
               </span>
-              <button onClick={() => setContextIds(new Set())} className="text-[11px] text-neutral-400 hover:text-neutral-900">
-                清空
-              </button>
+              <div className="flex gap-1.5">
+                <button onClick={() => setUploadOpen(true)} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋导入</button>
+                <button onClick={() => setContextIds(new Set())} className="text-[11px] text-neutral-400 hover:text-neutral-900">
+                  清空
+                </button>
+              </div>
             </div>
-            <div className="mt-1 max-h-[240px] overflow-y-auto border border-neutral-100">
+            <div className="mt-1 min-h-0 flex-1 overflow-y-auto border border-neutral-100">
               {ready.length === 0 ? (
                 <p className="px-2 py-2 text-[11px] text-neutral-300">暂无资料（可先去工作台上传）</p>
               ) : (
@@ -808,6 +861,17 @@ export default function SolvePage() {
 
           {/* 右侧预览抽屉 */}
           <SourcePreviewDrawer source={previewSource} onClose={() => setPreviewSource(null)} />
+
+          {/* 导入资料弹窗 */}
+          <UploadModal
+            open={uploadOpen}
+            defaultCategoryId={null}
+            categories={categories}
+            onClose={() => setUploadOpen(false)}
+            onUpload={doUpload}
+            onAddLink={doAddLink}
+            onAddText={doAddText}
+          />
         </div>
       </main>
     </div>

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Sidebar from "@/components/Sidebar";
+import UploadModal from "@/components/UploadModal";
 import type { AnyTranslationDoc, Source, TranslationDoc } from "@/lib/types";
 import { isPdfDoc } from "@/lib/types";
 
@@ -43,6 +44,8 @@ export default function TranslatePage() {
   const [activeKey, setActiveKey] = useState("");
   const [batchBusy, setBatchBusy] = useState(false);
   const [error, setError] = useState("");
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const busyRef = useRef(false);
 
   const active = tabs.find((t) => t.key === activeKey) ?? null;
@@ -53,12 +56,19 @@ export default function TranslatePage() {
       .then((d) => setHistory((d.artifacts ?? []).filter((a: { type: string }) => a.type === "translation")));
   }, []);
 
-  useEffect(() => {
+  const loadSources = useCallback(() => {
     fetch("/api/sources")
       .then((r) => r.json())
-      .then((d) => setSources(d.sources ?? []));
+      .then((d) => {
+        setSources(d.sources ?? []);
+        setCategories(d.categories ?? []);
+      });
+  }, []);
+
+  useEffect(() => {
+    loadSources();
     loadHistory();
-  }, [loadHistory]);
+  }, [loadSources, loadHistory]);
 
   /** 可翻译：仅 PDF（本功能只做保真双语翻译；文件可用性由服务端校验） */
   const translatable = useMemo(
@@ -78,6 +88,43 @@ export default function TranslatePage() {
 
   function patchTab(key: string, partial: Partial<TrTab>) {
     setTabs((prev) => prev.map((t) => (t.key === key ? { ...t, ...partial } : t)));
+  }
+
+  /** 导入资料：上传/链接/文本入库，成功后刷新资源列表 */
+  async function doUpload(files: File[], categoryId: number | null) {
+    for (const f of files) {
+      const fd = new FormData();
+      fd.append("file", f);
+      if (categoryId != null) fd.append("categoryId", String(categoryId));
+      fd.append("type", "课件");
+      const res = await fetch("/api/sources", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) setError(data.error ?? `《${f.name}》上传失败`);
+      else if (data.duplicate) setError(data.message);
+    }
+    loadSources();
+  }
+
+  async function doAddLink(url: string, categoryId: number | null) {
+    const res = await fetch("/api/sources", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, categoryId: categoryId ?? undefined }),
+    });
+    const data = await res.json();
+    if (data.error) setError(data.error);
+    else if (data.duplicate) setError(data.message);
+    loadSources();
+  }
+
+  async function doAddText(text: string, categoryId: number | null) {
+    const res = await fetch("/api/sources", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, categoryId: categoryId ?? undefined }),
+    });
+    const data = await res.json();
+    if (data.error) setError(data.error);
+    else if (data.duplicate) setError(data.message);
+    loadSources();
   }
 
   const runOne = useCallback(
@@ -210,7 +257,7 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
           <div className="text-[15px] font-semibold tracking-tight">文献翻译</div>
           <div className="mt-0.5 text-[11px] text-neutral-400">多选 → 批量翻译 · 双文对照 · 可下载</div>
         </div>
-        <div className="flex-1 overflow-y-auto px-3 py-3">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 py-3">
           {error && (
             <div className="mb-2 border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{error}</div>
           )}
@@ -220,6 +267,7 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
               待翻译资源 <span className="num">{translatable.length}</span>
             </span>
             <div className="flex gap-1 text-[11px]">
+              <button onClick={() => setUploadOpen(true)} className="text-neutral-400 hover:text-neutral-900">＋导入</button>
               <button
                 onClick={() => setPicked(new Set(englishPicks.map((s) => s.id)))}
                 className="text-neutral-400 hover:text-neutral-900"
@@ -233,7 +281,7 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
             </div>
           </div>
 
-          <div className="mt-1 border border-neutral-100">
+          <div className="mt-1 min-h-0 flex-1 overflow-y-auto border border-neutral-100">
             {translatable.length === 0 ? (
               <p className="px-2 py-2 text-[11px] text-neutral-300">暂无可翻译资源（先去工作台上传并等待解析完成）</p>
             ) : (
@@ -264,12 +312,12 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
           <button
             onClick={startBatch}
             disabled={batchBusy || picked.size === 0}
-            className="mt-2 w-full border border-neutral-900 bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-700 disabled:opacity-40"
+            className="mt-2 shrink-0 border border-neutral-900 bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-700 disabled:opacity-40"
           >
             {batchBusy ? "批量翻译中…" : picked.size > 0 ? `翻译选中的 ${picked.size} 份` : "勾选资源开始翻译"}
           </button>
 
-          <div className="mt-4">
+          <div className="mt-4 max-h-[35%] shrink-0 overflow-y-auto">
             <div className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
               历史翻译 <span className="num">{history.length}</span>
             </div>
@@ -460,6 +508,17 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
           </>
         )}
       </main>
+
+      {/* 导入资料弹窗 */}
+      <UploadModal
+        open={uploadOpen}
+        defaultCategoryId={null}
+        categories={categories}
+        onClose={() => setUploadOpen(false)}
+        onUpload={doUpload}
+        onAddLink={doAddLink}
+        onAddText={doAddText}
+      />
     </div>
   );
 }
