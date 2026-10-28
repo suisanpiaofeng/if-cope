@@ -8,8 +8,9 @@
 import { useCallback, useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import DisclaimerGate, { DISCLAIMER_VERSION } from "@/components/classroom/DisclaimerGate";
-import { fetchLessons } from "@/lib/classroom/cvsApi";
-import type { ClassroomCourse, ClassroomLesson } from "@/lib/classroom/types";
+import { Markdown } from "@/components/Markdown";
+import { fetchLessons, fetchSubtitles } from "@/lib/classroom/cvsApi";
+import type { ClassroomCourse, ClassroomLesson, LessonNote } from "@/lib/classroom/types";
 
 const PROXY = "http://localhost:3778";
 
@@ -32,6 +33,14 @@ export default function ClassroomPage() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualReplayUrl, setManualReplayUrl] = useState(""); // 选中课时无链接时手粘兜底
+  // 逐课笔记（T5）
+  const [note, setNote] = useState<LessonNote | null>(null);
+  const [noteLoading, setNoteLoading] = useState(false);
+  const [generating, setGenerating] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<"listen" | "notes">("listen");
+  const [textForLesson, setTextForLesson] = useState<number | null>(null);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteBusy, setPasteBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // 同意状态（存版本号：声明更新可重新拦截）
@@ -132,6 +141,60 @@ export default function ClassroomPage() {
     setTimeout(() => setLoginBusy(false), 2000);
   }
 
+  /** 读选中课时的笔记 */
+  const loadNote = useCallback(async (lessonId: number) => {
+    setNoteLoading(true);
+    try {
+      const r = await fetch(`/api/classroom/lessons/${lessonId}/note`);
+      setNote(r.ok ? (await r.json()).note : null);
+    } catch {
+      setNote(null);
+    } finally {
+      setNoteLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeLessonId != null) void loadNote(activeLessonId);
+    else setNote(null);
+  }, [activeLessonId, loadNote]);
+
+  /** 生成逐课笔记：先拉平台 AI 字幕（经反代），没字幕则弹窗手贴课堂文本 */
+  async function generateNote(lesson: ClassroomLesson) {
+    if (generating != null) return;
+    setMsg(null);
+    setGenerating(lesson.id);
+    try {
+      const sub = await fetchSubtitles(lesson.cvs_lesson_id);
+      if (sub.ok && sub.segments?.length) {
+        await postNote(lesson.id, { segments: sub.segments });
+      } else {
+        // 字幕不可用（未联调/未生成/转码中）→ 手贴课堂文本兑底
+        setTextForLesson(lesson.id);
+        setPasteText("");
+      }
+    } finally {
+      setGenerating(null);
+    }
+  }
+
+  async function postNote(lessonId: number, body: Record<string, unknown>) {
+    const r = await fetch(`/api/classroom/lessons/${lessonId}/note`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (d.error) {
+      setMsg({ kind: "err", text: d.error });
+      return false;
+    }
+    setMsg({ kind: "ok", text: "笔记已生成" });
+    await loadLessons(activeCourseId ?? 0);
+    if (activeLessonId === lessonId) await loadNote(lessonId);
+    return true;
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-white">
       <Sidebar configured={null} />
@@ -221,23 +284,39 @@ export default function ClassroomPage() {
               </p>
             ) : (
               lessons.map((l) => (
-                <button
+                <div
                   key={l.id}
                   onClick={() => {
                     setActiveLessonId(l.id);
                     setManualReplayUrl("");
                   }}
-                  className={`block w-full rounded-lg px-2.5 py-2 text-left text-[12.5px] ${
+                  className={`group cursor-pointer rounded-lg px-2.5 py-2 ${
                     l.id === activeLessonId ? "bg-neutral-100" : "hover:bg-neutral-50"
                   }`}>
                   <div className="flex items-center gap-1.5">
                     <span className="num shrink-0 text-[10px] text-neutral-300">{l.seq}</span>
-                    <span className="min-w-0 flex-1 truncate text-neutral-700">{l.title}</span>
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-neutral-700">{l.title}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void generateNote(l);
+                      }}
+                      disabled={generating != null}
+                      title="拉平台 AI 字幕生成笔记；无字幕时可粘贴课堂文本"
+                      className="shrink-0 px-1 text-[10px] text-neutral-400 hover:text-neutral-900 disabled:opacity-40">
+                      {generating === l.id ? "生成中…" : l.note_status === "done" ? "重新生成" : "生成笔记"}
+                    </button>
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    {l.note_status === "done" && <span className="text-[10px] text-emerald-600">● 有笔记</span>}
+                    {l.note_status === "failed" && (
+                      <span className="text-[10px] text-red-500" title={l.error_note}>● 失败</span>
+                    )}
                     {l.vod_status === -3 && (
-                      <span className="shrink-0 text-[10px] text-amber-500" title="平台转码中，稍后重试">转码中</span>
+                      <span className="text-[10px] text-amber-500" title="平台转码中，稍后重试">转码中</span>
                     )}
                   </div>
-                </button>
+                </div>
               ))
             )}
           </div>
@@ -250,8 +329,16 @@ export default function ClassroomPage() {
               <div className="truncate text-[13px] font-semibold">{activeLesson?.title ?? "课堂"}</div>
               {activeLesson && (
                 <div className="flex shrink-0 gap-0.5 text-[11px]">
-                  <span className="rounded bg-neutral-900 px-2.5 py-1 text-white">▶ 视频</span>
-                  <span className="rounded px-2.5 py-1 text-neutral-300" title="T5 实现">✎ 笔记</span>
+                  <button
+                    onClick={() => setViewMode("listen")}
+                    className={`rounded px-2.5 py-1 ${viewMode === "listen" ? "bg-neutral-900 text-white" : "text-neutral-500 hover:bg-neutral-100"}`}>
+                    ▶ 视频
+                  </button>
+                  <button
+                    onClick={() => setViewMode("notes")}
+                    className={`rounded px-2.5 py-1 ${viewMode === "notes" ? "bg-neutral-900 text-white" : "text-neutral-500 hover:bg-neutral-100"}`}>
+                    ✎ 笔记
+                  </button>
                 </div>
               )}
             </div>
@@ -280,7 +367,27 @@ export default function ClassroomPage() {
               </button>
             </div>
           </div>
-          {activeLesson ? (
+          {activeLesson && viewMode === "notes" ? (
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {noteLoading ? (
+                <p className="py-8 text-center text-xs text-neutral-400">读取笔记…</p>
+              ) : note ? (
+                <div className="mx-auto max-w-[720px]">
+                  <div className="mb-3 flex items-center gap-2 text-[11px] text-neutral-400">
+                    逐课笔记 · 生成模型 {note.model}
+                  </div>
+                  <Markdown text={note.content_md} />
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center">
+                  <div className="max-w-[380px] text-center">
+                    <p className="text-sm text-neutral-500">本课时暂无笔记</p>
+                    <p className="mt-1 text-xs text-neutral-400">点课时行尾「生成笔记」（平台 AI 字幕优先；无字幕可粘贴课堂文本）</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : activeLesson ? (
             (() => {
               // 内嵌地址：优先课时 replay_url；无链接时手粘官方回放链接兑底
               const raw = activeLesson.replay_url || manualReplayUrl;
@@ -390,6 +497,44 @@ export default function ClassroomPage() {
       )}
 
       {/* 手动 Cookie 兜底弹窗 */}
+      {textForLesson != null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setTextForLesson(null)}>
+          <div className="w-[520px] max-w-full rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold">粘贴课堂文本</h3>
+            <p className="mt-1 text-[11.5px] leading-5 text-neutral-500">
+              平台 AI 字幕暂不可用（课后 12h 内生成中 / 接口未联调）。可从官方页复制字幕/课堂文字粘贴到下面，据此生成笔记。
+            </p>
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              rows={8}
+              placeholder="粘贴本节课的字幕或课堂文字…"
+              className="mt-3 w-full rounded-lg border border-neutral-200 px-3 py-2 text-[12.5px] leading-5 outline-none focus:border-neutral-400"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setTextForLesson(null)} disabled={pasteBusy}
+                className="rounded-lg border border-neutral-200 px-3.5 py-1.5 text-[13px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-40">
+                取消
+              </button>
+              <button
+                disabled={pasteBusy || !pasteText.trim()}
+                onClick={async () => {
+                  setPasteBusy(true);
+                  try {
+                    const ok = await postNote(textForLesson, { manualText: pasteText });
+                    if (ok) setTextForLesson(null);
+                  } finally {
+                    setPasteBusy(false);
+                  }
+                }}
+                className="rounded-lg bg-neutral-900 px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-neutral-700 disabled:opacity-40">
+                {pasteBusy ? "生成中…" : "生成笔记"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {cookieOpen && (
         <CookieDialog
           onClose={() => setCookieOpen(false)}
