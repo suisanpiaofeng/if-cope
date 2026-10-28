@@ -45,6 +45,8 @@ export default function ClassroomPage() {
   const [digest, setDigest] = useState<{ content_md: string; model: string; source_id: number | null } | null>(null);
   const [digestBusy, setDigestBusy] = useState(false);
   const [digestOpen, setDigestOpen] = useState(false); // 手册阅读覆盖层
+  // 导出（T8）：确认弹层（合规出口提示，规格 §7）
+  const [exportFor, setExportFor] = useState<{ filename: string; content: string } | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // 同意状态（存版本号：声明更新可重新拦截）
@@ -197,6 +199,22 @@ export default function ClassroomPage() {
     } finally {
       setDigestBusy(false);
     }
+  }
+
+  /** 导出 Markdown（先过合规确认弹层） */
+  function askExport(filename: string, content: string) {
+    setExportFor({ filename, content });
+  }
+
+  function doExport() {
+    if (!exportFor) return;
+    const blob = new Blob([exportFor.content], { type: "text/markdown;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = exportFor.filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setExportFor(null);
   }
 
   /** 生成逐课笔记：先拉平台 AI 字幕（经反代），没字幕则弹窗手贴课堂文本 */
@@ -425,13 +443,23 @@ export default function ClassroomPage() {
                 <p className="py-8 text-center text-xs text-neutral-400">读取笔记…</p>
               ) : note ? (
                 <div className="mx-auto max-w-[720px]">
-                  <div className="mb-3 flex items-center gap-2 text-[11px] text-neutral-400">
-                    逐课笔记 · 生成模型 {note.model}
-                    {note.source_id != null && (
-                      <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-emerald-700" title="笔记已登记进资料库，工作台对话/检索可直接引用">
-                        已入检索
-                      </span>
-                    )}
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-[11px] text-neutral-400">
+                      逐课笔记 · 生成模型 {note.model}
+                      {note.source_id != null && (
+                        <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-emerald-700" title="笔记已登记进资料库，工作台对话/检索可直接引用">
+                          已入检索
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => askExport(
+                        `${activeCourse?.name ?? "课程"}-${activeLesson?.title ?? "课时"}.md`,
+                        note.content_md
+                      )}
+                      className="shrink-0 rounded border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-50">
+                      导出 MD
+                    </button>
                   </div>
                   <Markdown text={note.content_md} />
                 </div>
@@ -554,6 +582,29 @@ export default function ClassroomPage() {
       )}
 
       {/* 手动 Cookie 兜底弹窗 */}
+      {/* 导出合规确认（规格 §7：导出出口带「请勿公开转发」提示） */}
+      {exportFor && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/30" onClick={() => setExportFor(null)}>
+          <div className="w-[400px] max-w-full rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold">导出确认</h3>
+            <p className="mt-2 text-[12px] leading-5 text-neutral-600">
+              课堂资料属学校教学资源，导出文件<b>请勿公开转发</b>；仅供个人学习使用。
+            </p>
+            <p className="mt-2 truncate text-[11px] text-neutral-400">{exportFor.filename}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setExportFor(null)}
+                className="rounded-lg border border-neutral-200 px-3.5 py-1.5 text-[13px] text-neutral-600 hover:bg-neutral-50">
+                取消
+              </button>
+              <button onClick={doExport}
+                className="rounded-lg bg-neutral-900 px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-neutral-700">
+                继续导出
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 期末手册阅读覆盖层 */}
       {digestOpen && digest && (
         <div className="fixed inset-0 z-50 flex flex-col bg-white">
@@ -568,6 +619,11 @@ export default function ClassroomPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => askExport(`${activeCourse?.name ?? "课程"}-期末复习手册.md`, digest.content_md)}
+                className="rounded-lg border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50">
+                导出 MD
+              </button>
               <button
                 onClick={() => void makeDigest()}
                 disabled={digestBusy}
