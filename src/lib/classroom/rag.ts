@@ -13,22 +13,23 @@ export async function registerNoteAsSource(input: {
   contentMd: string;
   oldSourceId?: number | null;
 }): Promise<{ ok: boolean; sourceId?: number; error?: string }> {
-  // 删旧（chunks/FTS 由触发器级联）
-  if (input.oldSourceId) {
-    db.prepare("DELETE FROM chunks WHERE source_id = ?").run(input.oldSourceId);
-    db.prepare("DELETE FROM sources WHERE id = ?").run(input.oldSourceId);
-  }
-
   const buffer = Buffer.from(input.contentMd, "utf8");
   const storageName = saveFile(buffer, "md");
   const now = Date.now();
-  const info = db
-    .prepare(
-      `INSERT INTO sources (title, filename, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at)
-       VALUES (?, ?, 'md', 'text/markdown', ?, ?, 'file', NULL, '笔记', NULL, 'processing', ?)`
-    )
-    .run(input.title, storageName, buffer.length, sha256(buffer), now);
-  const sourceId = Number(info.lastInsertRowid);
+  // 删旧 + 插新包在一个事务：避免中途失败留下无 source 的孤儿 chunks / 丢失 sourceId
+  const sourceId = db.transaction(() => {
+    if (input.oldSourceId) {
+      db.prepare("DELETE FROM chunks WHERE source_id = ?").run(input.oldSourceId);
+      db.prepare("DELETE FROM sources WHERE id = ?").run(input.oldSourceId);
+    }
+    const info = db
+      .prepare(
+        `INSERT INTO sources (title, filename, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at)
+         VALUES (?, ?, 'md', 'text/markdown', ?, ?, 'file', NULL, '笔记', NULL, 'processing', ?)`
+      )
+      .run(input.title, storageName, buffer.length, sha256(buffer), now);
+    return Number(info.lastInsertRowid);
+  })();
 
   // 切块 + 向量化 + FTS（ingestSource 内部失败会把 status 置 failed，不 throw）
   await ingestSource(sourceId);
