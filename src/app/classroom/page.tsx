@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import DisclaimerGate, { DISCLAIMER_VERSION } from "@/components/classroom/DisclaimerGate";
+import { fetchLessons } from "@/lib/classroom/cvsApi";
 import type { ClassroomCourse, ClassroomLesson } from "@/lib/classroom/types";
 
 const PROXY = "http://localhost:3778";
@@ -26,6 +27,11 @@ export default function ClassroomPage() {
   // 登记
   const [regOpen, setRegOpen] = useState(false);
   const [regBusy, setRegBusy] = useState(false);
+  // 课时同步/手动添加
+  const [syncing, setSyncing] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualReplayUrl, setManualReplayUrl] = useState(""); // 选中课时无链接时手粘兜底
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // 同意状态（存版本号：声明更新可重新拦截）
@@ -83,6 +89,40 @@ export default function ClassroomPage() {
   const activeCourse = courses.find((c) => c.id === activeCourseId) ?? null;
   const activeLesson = lessons.find((l) => l.id === activeLessonId) ?? null;
 
+  const loadLessons = useCallback(async (courseId: number) => {
+    const r = await fetch(`/api/classroom/lessons?courseId=${courseId}`);
+    const d = await r.json();
+    setLessons(d.lessons ?? []);
+  }, []);
+
+  /** 同步课时：浏览器经反代拉官方目录 → 提交落库（接口未联调时显示明确错误） */
+  async function syncLessons() {
+    if (!activeCourse || syncing) return;
+    setSyncing(true);
+    setMsg(null);
+    try {
+      const r = await fetchLessons(activeCourse.cvs_course_id);
+      if (!r.ok || !r.lessons) {
+        setMsg({ kind: "err", text: r.error ?? "同步失败" });
+        return;
+      }
+      const post = await fetch("/api/classroom/lessons", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ courseId: activeCourse.id, lessons: r.lessons }),
+      });
+      const d = await post.json();
+      if (d.error) {
+        setMsg({ kind: "err", text: d.error });
+        return;
+      }
+      setMsg({ kind: "ok", text: `已同步 ${d.saved} 个课时` });
+      await loadLessons(activeCourse.id);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   /** 弹顶层窗口走官方 CAS 网页登录（Cookie 落 localhost，浏览器托管） */
   function doLogin() {
     if (loginBusy) return;
@@ -138,10 +178,27 @@ export default function ClassroomPage() {
           </div>
         </div>
 
-        {/* 中：课时列表（T4 填充） */}
+        {/* 中：课时列表 */}
         <div className="flex w-[260px] shrink-0 flex-col border-r border-neutral-200">
           <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
             <div className="truncate text-[13px] font-semibold">{activeCourse?.name ?? "课时"}</div>
+            {activeCourse && (
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  onClick={() => void syncLessons()}
+                  disabled={syncing}
+                  title="从官方平台拉课时目录（需先登录）"
+                  className="rounded border border-neutral-200 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
+                  {syncing ? "同步中…" : "同步课时"}
+                </button>
+                <button
+                  onClick={() => setManualOpen(true)}
+                  title="官方接口不可用时手动录入课时"
+                  className="rounded border border-neutral-200 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-50">
+                  ＋手动
+                </button>
+              </div>
+            )}
           </div>
           {msg && (
             <div
@@ -160,28 +217,43 @@ export default function ClassroomPage() {
               </p>
             ) : lessons.length === 0 ? (
               <p className="rounded border border-dashed border-neutral-200 px-3 py-4 text-center text-[11px] text-neutral-300">
-                尚无课时（T4：同步课时 / 手动添加）
+                尚无课时 · 点「同步课时」或「＋手动」添加
               </p>
             ) : (
               lessons.map((l) => (
                 <button
                   key={l.id}
-                  onClick={() => setActiveLessonId(l.id)}
+                  onClick={() => {
+                    setActiveLessonId(l.id);
+                    setManualReplayUrl("");
+                  }}
                   className={`block w-full rounded-lg px-2.5 py-2 text-left text-[12.5px] ${
                     l.id === activeLessonId ? "bg-neutral-100" : "hover:bg-neutral-50"
                   }`}>
-                  <div className="truncate text-neutral-700">{l.title}</div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="num shrink-0 text-[10px] text-neutral-300">{l.seq}</span>
+                    <span className="min-w-0 flex-1 truncate text-neutral-700">{l.title}</span>
+                    {l.vod_status === -3 && (
+                      <span className="shrink-0 text-[10px] text-amber-500" title="平台转码中，稍后重试">转码中</span>
+                    )}
+                  </div>
                 </button>
               ))
             )}
           </div>
         </div>
 
-        {/* 右：主区（视频/笔记双标签；内容 T4/T5 填充） */}
+        {/* 右：主区（▶视频 / ✎笔记 双标签；笔记 T5 填充） */}
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-2.5">
-            <div className="truncate text-[13px] font-semibold">
-              {activeLesson ? "课时（T4 接视频）" : "课堂"}
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="truncate text-[13px] font-semibold">{activeLesson?.title ?? "课堂"}</div>
+              {activeLesson && (
+                <div className="flex shrink-0 gap-0.5 text-[11px]">
+                  <span className="rounded bg-neutral-900 px-2.5 py-1 text-white">▶ 视频</span>
+                  <span className="rounded px-2.5 py-1 text-neutral-300" title="T5 实现">✎ 笔记</span>
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {proxyRunning === false && (
@@ -208,14 +280,49 @@ export default function ClassroomPage() {
               </button>
             </div>
           </div>
-          <div className="flex flex-1 items-center justify-center px-6">
-            <div className="max-w-[420px] text-center">
-              <p className="text-sm text-neutral-500">
-                {activeLesson ? "内嵌播放（T4）" : "选择课时后这里看回放"}
-              </p>
-              <p className="mt-1 text-xs text-neutral-400">逐课笔记与期末复习手册（T5-T7）</p>
+          {activeLesson ? (
+            (() => {
+              // 内嵌地址：优先课时 replay_url；无链接时手粘官方回放链接兑底
+              const raw = activeLesson.replay_url || manualReplayUrl;
+              const m = raw ? raw.match(/^https?:\/\/(?:(?:cvs\.)?seu\.edu\.cn)?([^?#]*)/) : null;
+              const path = m ? (m[1] || "/") + (raw.includes("?") ? raw.slice(raw.indexOf("?")) : "") : null;
+              if (!path) {
+                return (
+                  <div className="flex flex-1 items-center justify-center px-6">
+                    <div className="w-[380px] text-center">
+                      <p className="text-sm text-neutral-500">
+                        {activeLesson.replay_url ? "回放地址无法解析" : "本课时还没有回放链接"}
+                      </p>
+                      <input
+                        value={manualReplayUrl}
+                        onChange={(e) => setManualReplayUrl(e.target.value)}
+                        placeholder="粘贴官方回放页链接（https://cvs.seu.edu.cn/…）"
+                        className="mt-3 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400"
+                      />
+                      <p className="mt-2 text-[11px] text-neutral-400">
+                        {loggedIn ? "登录态已保存，粘贴后即可在应用内听课" : "先点右上「登录 CVS」保存登录态"}
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <iframe
+                  key={activeLesson.id}
+                  src={PROXY + path}
+                  title="回放"
+                  className="h-full min-h-0 w-full border-0"
+                />
+              );
+            })()
+          ) : (
+            <div className="flex flex-1 items-center justify-center px-6">
+              <div className="max-w-[420px] text-center">
+                <p className="text-sm text-neutral-500">选择课时后这里看回放</p>
+                <p className="mt-1 text-xs text-neutral-400">逐课笔记与期末复习手册（T5-T7）</p>
+              </div>
             </div>
-          </div>
+          )}
         </main>
       </div>
 
@@ -241,6 +348,42 @@ export default function ClassroomPage() {
               return e instanceof Error ? e.message : "登记失败";
             } finally {
               setRegBusy(false);
+            }
+          }}
+        />
+      )}
+
+      {/* 手动添加课时弹窗 */}
+      {manualOpen && activeCourse && (
+        <ManualLessonDialog
+          busy={manualBusy}
+          onClose={() => setManualOpen(false)}
+          onSubmit={async (v) => {
+            setManualBusy(true);
+            try {
+              const r = await fetch("/api/classroom/lessons", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  courseId: activeCourse.id,
+                  lessons: [{
+                    cvsLessonId: `manual-${Date.now()}`,
+                    title: v.title,
+                    seq: lessons.length + 1,
+                    replayUrl: v.replayUrl,
+                    vodStatus: null,
+                    durationSec: null,
+                  }],
+                }),
+              });
+              const d = await r.json();
+              if (d.error) return d.error;
+              await loadLessons(activeCourse.id);
+              return null;
+            } catch (e) {
+              return e instanceof Error ? e.message : "添加失败";
+            } finally {
+              setManualBusy(false);
             }
           }}
         />
@@ -351,6 +494,67 @@ function RegisterDialog({ busy, onClose, onSubmit }: {
 }
 
 /** 手动 Cookie 兜底：网页登录失败时，从官方页复制 Cookie 粘贴（规格 §8 保底路径） */
+/** 手动添加课时：官方接口不可用时的兑底录入（标题 + 回放链接） */
+function ManualLessonDialog({ busy, onClose, onSubmit }: {
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (v: { title: string; replayUrl: string }) => Promise<string | null>;
+}) {
+  const [title, setTitle] = useState("");
+  const [replayUrl, setReplayUrl] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit() {
+    if (!title.trim()) {
+      setErr("请填写课时标题");
+      return;
+    }
+    const e = await onSubmit({ title: title.trim(), replayUrl: replayUrl.trim() });
+    if (e) setErr(e);
+    else onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={busy ? undefined : onClose}>
+      <div className="w-[400px] max-w-full rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold">手动添加课时</h3>
+        <div className="mt-4 space-y-3">
+          <div>
+            <div className="mb-1 text-[11px] text-neutral-400">课时标题 *</div>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              autoFocus
+              placeholder="如 第 3 讲 极限与连续"
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400"
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-[11px] text-neutral-400">回放链接（可选，粘官方回放页地址）</div>
+            <input
+              value={replayUrl}
+              onChange={(e) => setReplayUrl(e.target.value)}
+              placeholder="https://cvs.seu.edu.cn/…"
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400"
+            />
+          </div>
+        </div>
+        {err && <div className="mt-3 border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">{err}</div>}
+        <div className="mt-4 flex justify-end gap-2">
+          <button onClick={onClose} disabled={busy}
+            className="rounded-lg border border-neutral-200 px-3.5 py-1.5 text-[13px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-40">
+            取消
+          </button>
+          <button onClick={submit} disabled={busy}
+            className="rounded-lg bg-neutral-900 px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-neutral-700 disabled:opacity-40">
+            {busy ? "添加中…" : "添加"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CookieDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);

@@ -22,8 +22,9 @@ import {
   rewriteLocation,
 } from "./cookieRewrite";
 
-/** /__whoami 探测用的官方轻量路径（真机联调确认：选一个未登录会 302 到 CAS 的路径） */
-const WHOAMI_PATH = "/";
+/** /__whoami 探测用的官方接口路径（真机联调确认：选一个未登录必 302 到 CAS 或 401 的轻量接口。
+ *  注意不能用首页——未登录也 200 会误判已登录） */
+const WHOAMI_PATH = "/api/user/info";
 
 /** 剥掉的响应头（本地转发场景由我们自己说了算；Set-Cookie 不剥——登录态靠它落 localhost） */
 const STRIP = new Set([
@@ -82,7 +83,7 @@ function fail(res: http.ServerResponse, msg: string): void {
   res.end(msg);
 }
 
-/** 一次上游请求（不自动跟随重定向——重定向由 rewriteLocation 接管） */
+/** 一次上游请求（不自动跟随重定向——重定向由 rewriteLocation 接管；15s 超时防校园网卡死把 UI 拖住） */
 function upstreamRequest(
   opts: { host: string; path: string; method: string; headers: http.OutgoingHttpHeaders },
   body: Buffer | null
@@ -99,6 +100,9 @@ function upstreamRequest(
       ures.on("end", () =>
         resolve({ status: ures.statusCode ?? 502, headers: ures.headers, body: Buffer.concat(chunks) })
       );
+    });
+    req.setTimeout(15000, () => {
+      req.destroy(new Error("上游响应超时（15s）——确认校园网/VPN 连通"));
     });
     req.on("error", reject);
     if (body) req.write(body);
@@ -186,6 +190,7 @@ async function proxyHandler(req: http.IncomingMessage, res: http.ServerResponse)
         res.writeHead(200, { "content-type": "application/json", ...CORS });
         res.end(JSON.stringify({ loggedIn: true }));
       } else {
+        // 401/302/404 一律判未登录（宁可让用户点登录，不可误报已登录）
         res.writeHead(200, { "content-type": "application/json", ...CORS });
         res.end(JSON.stringify({ loggedIn: false }));
       }

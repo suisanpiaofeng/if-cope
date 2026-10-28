@@ -6,16 +6,13 @@
 export const CVS_ORIGIN = "https://cvs.seu.edu.cn";
 export const PROXY_ORIGIN = "http://localhost:3778";
 
-/**
- * 官方接口路径（真机联调：F12 打开官方课程页，看真实请求的 path/query 改这里）。
- * 占位路径会在 fetch 时返回 404 → fetchLessons 返回明确的「未联调」错误。
- */
+/** 官方接口在反代下的路径前缀（前端 fetch 一律打反代：同机 http 无 CORS 问题，Cookie 由浏览器自动带上） */
 export const API = {
   /** 课时目录：按课程 id 拉回放列表 */
-  lessons: (teclId: string) => `${CVS_ORIGIN}/api/lesson/list?teclId=${encodeURIComponent(teclId)}`,
+  lessons: (teclId: string) => `${PROXY_ORIGIN}/api/lesson/list?teclId=${encodeURIComponent(teclId)}`,
   /** AI 字幕：按课时取字幕 segments（课后 12h 内平台生成） */
   subtitles: (lessonCvsId: string) =>
-    `${CVS_ORIGIN}/api/subtitle/get?lessonId=${encodeURIComponent(lessonCvsId)}`,
+    `${PROXY_ORIGIN}/api/subtitle/get?lessonId=${encodeURIComponent(lessonCvsId)}`,
 };
 
 /** 从课程链接解析明文 teclId；加密分享链接/无关链接返回 null（规格 §4：一期只支持明文） */
