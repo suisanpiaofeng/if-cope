@@ -74,6 +74,65 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
 );
 `);
 
+/* ── 课堂专区 v2（规格 docs/课堂专区-架构规格-v2-20261028.md §3）──
+ * 多用户就绪：所有表带 user_id（本地 demo 恒为默认用户）；笔记/手册重生成幂等（UNIQUE 单行） */
+const DEFAULT_USER = "local";
+export { DEFAULT_USER };
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS classroom_courses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL DEFAULT 'local',
+  cvs_course_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  term TEXT NOT NULL DEFAULT '',
+  teacher TEXT NOT NULL DEFAULT '',
+  meta_json TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(user_id, cvs_course_id)
+);
+CREATE TABLE IF NOT EXISTS classroom_lessons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  course_id INTEGER NOT NULL REFERENCES classroom_courses(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL DEFAULT 'local',
+  cvs_lesson_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  seq INTEGER NOT NULL DEFAULT 0,
+  replay_url TEXT NOT NULL DEFAULT '',
+  vod_status INTEGER,
+  duration_sec INTEGER,
+  note_status TEXT NOT NULL DEFAULT 'none',
+  error_note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(user_id, cvs_lesson_id)
+);
+CREATE TABLE IF NOT EXISTS classroom_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lesson_id INTEGER NOT NULL REFERENCES classroom_lessons(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL DEFAULT 'local',
+  content_md TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  source_id INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(lesson_id)
+);
+CREATE TABLE IF NOT EXISTS classroom_digests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  course_id INTEGER NOT NULL REFERENCES classroom_courses(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL DEFAULT 'local',
+  content_md TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  source_id INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(course_id)
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_lessons_course ON classroom_lessons(course_id, seq);
+`);
+
 /* ── 索引 2.0：结构感知分块 + 混合检索（FTS5 关键词 + 向量，参考 Khoj/Quivr/LangChain） ──
  * heading 列：旧库迁移；chunks_fts：trigram 中文全文索引（external content + 触发器自动同步，
  * 业务层无需手动维护；rebuild 仅在首次建表时执行一次）。 */
