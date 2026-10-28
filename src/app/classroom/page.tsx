@@ -41,6 +41,10 @@ export default function ClassroomPage() {
   const [textForLesson, setTextForLesson] = useState<number | null>(null);
   const [pasteText, setPasteText] = useState("");
   const [pasteBusy, setPasteBusy] = useState(false);
+  // 期末手册（T7）
+  const [digest, setDigest] = useState<{ content_md: string; model: string; source_id: number | null } | null>(null);
+  const [digestBusy, setDigestBusy] = useState(false);
+  const [digestOpen, setDigestOpen] = useState(false); // 手册阅读覆盖层
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // 同意状态（存版本号：声明更新可重新拦截）
@@ -159,6 +163,42 @@ export default function ClassroomPage() {
     else setNote(null);
   }, [activeLessonId, loadNote]);
 
+  /** 读课程的期末手册 */
+  const loadDigest = useCallback(async (courseId: number) => {
+    try {
+      const r = await fetch(`/api/classroom/courses/${courseId}/digest`);
+      const d = await r.json();
+      setDigest(d.digest ?? null);
+    } catch {
+      setDigest(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeCourseId != null) void loadDigest(activeCourseId);
+    else setDigest(null);
+  }, [activeCourseId, loadDigest]);
+
+  /** 生成/重生成期末手册 */
+  async function makeDigest() {
+    if (!activeCourse || digestBusy) return;
+    setDigestBusy(true);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/classroom/courses/${activeCourse.id}/digest`, { method: "POST" });
+      const d = await r.json();
+      if (d.error) {
+        setMsg({ kind: "err", text: d.error });
+        return;
+      }
+      setDigest(d.digest);
+      setDigestOpen(true);
+      setMsg({ kind: "ok", text: "期末手册已生成" });
+    } finally {
+      setDigestBusy(false);
+    }
+  }
+
   /** 生成逐课笔记：先拉平台 AI 字幕（经反代），没字幕则弹窗手贴课堂文本 */
   async function generateNote(lesson: ClassroomLesson) {
     if (generating != null) return;
@@ -272,6 +312,18 @@ export default function ClassroomPage() {
               }`}>
               {msg.text}
             </div>
+          )}
+          {(digest || lessons.some((l) => l.note_status === "done")) && activeCourse && (
+            <button
+              onClick={() => (digest ? setDigestOpen(true) : void makeDigest())}
+              disabled={digestBusy}
+              title={digest ? "阅读期末复习手册" : "汇总逐课笔记按主题重组（期末突击用）"}
+              className="mx-3 mt-2 flex items-center justify-between rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-left hover:bg-neutral-100 disabled:opacity-40">
+              <span className="text-[12px] font-medium text-neutral-700">📖 期末复习手册</span>
+              <span className="text-[10px] text-neutral-400">
+                {digestBusy ? "生成中…" : digest ? "阅读 / 重新生成" : "生成"}
+              </span>
+            </button>
           )}
           <div className="flex-1 overflow-y-auto px-2 py-2">
             {!activeCourse ? (
@@ -502,6 +554,41 @@ export default function ClassroomPage() {
       )}
 
       {/* 手动 Cookie 兜底弹窗 */}
+      {/* 期末手册阅读覆盖层 */}
+      {digestOpen && digest && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-white">
+          <div className="flex shrink-0 items-center justify-between border-b border-neutral-200 px-6 py-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[14px] font-semibold">📖 期末复习手册</span>
+              <span className="text-[11px] text-neutral-400">生成模型 {digest.model}</span>
+              {digest.source_id != null && (
+                <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700" title="手册已登记进资料库，工作台对话/检索可直接引用">
+                  已入检索
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => void makeDigest()}
+                disabled={digestBusy}
+                className="rounded-lg border border-neutral-200 px-3 py-1.5 text-[12px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-40">
+                {digestBusy ? "重新生成中…" : "重新生成"}
+              </button>
+              <button
+                onClick={() => setDigestOpen(false)}
+                className="rounded-lg bg-neutral-900 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-neutral-700">
+                关闭
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <div className="mx-auto max-w-[820px]">
+              <Markdown text={digest.content_md} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {textForLesson != null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => setTextForLesson(null)}>
           <div className="w-[520px] max-w-full rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
