@@ -7,7 +7,8 @@
 import db, { getSettings, isModelConfigured, recordUsage } from "@/lib/db";
 import { estimateTokens } from "@/lib/embed";
 import { modelEndpoint, modelHeaders } from "@/lib/modelGateway";
-import { getLesson, getLessonNote, saveLessonNote, setLessonNoteStatus } from "./store";
+import { getLesson, getCourse, getLessonNote, saveLessonNote, setLessonNoteStatus } from "./store";
+import { registerNoteAsSource } from "./rag";
 import type { TranscriptSegment } from "./types";
 
 /** 转写输入上限：超过截断（保头尾，LLM 上下文纪律） */
@@ -70,8 +71,7 @@ export async function generateLessonNote(
   // 未配置模型 → mock（演示链路，格式与契约一致）
   if (!isModelConfigured(s)) {
     const content = mockNote(lesson.title, transcriptText);
-    saveLessonNote(lessonId, content, "mock", getLessonNote(lessonId)?.source_id ?? null);
-    setLessonNoteStatus(lessonId, "done");
+    await persistNote(lessonId, lesson.title, content, "mock");
     recordUsage("note", "mock-lesson", estimateTokens(transcriptText), estimateTokens(content));
     return { ok: true };
   }
@@ -99,8 +99,7 @@ export async function generateLessonNote(
     };
     const content = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!content) return failNote(lessonId, "模型返回了空内容");
-    saveLessonNote(lessonId, content, s.chatModel, getLessonNote(lessonId)?.source_id ?? null);
-    setLessonNoteStatus(lessonId, "done");
+    await persistNote(lessonId, lesson.title, content, s.chatModel);
     recordUsage(
       "note",
       s.chatModel,
@@ -116,6 +115,30 @@ export async function generateLessonNote(
 function failNote(lessonId: number, error: string): { ok: false; error: string } {
   setLessonNoteStatus(lessonId, "failed", error);
   return { ok: false, error };
+}
+
+/** 落库 + 回流 RAG（回流失败不连坐笔记——笔记已生成，仅提示未入检索） */
+async function persistNote(
+  lessonId: number,
+  lessonTitle: string,
+  content: string,
+  model: string
+): Promise<void> {
+  const course = getCourse(getLesson(lessonId)?.course_id ?? 0);
+  const old = getLessonNote(lessonId);
+  const title = `${course?.name ?? "课程"}·${lessonTitle}（课堂笔记）`;
+  const out = await registerNoteAsSource({
+    title,
+    contentMd: content,
+    oldSourceId: old?.source_id ?? null,
+  }).catch(
+    (e): { ok: boolean; sourceId?: number; error?: string } => ({
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    })
+  );
+  saveLessonNote(lessonId, content, model, out.sourceId ?? old?.source_id ?? null);
+  setLessonNoteStatus(lessonId, "done");
 }
 
 /** 未配置模型时的演示笔记（四节契约齐全，时间锚取转写前几段） */

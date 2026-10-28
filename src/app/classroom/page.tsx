@@ -375,6 +375,11 @@ export default function ClassroomPage() {
                 <div className="mx-auto max-w-[720px]">
                   <div className="mb-3 flex items-center gap-2 text-[11px] text-neutral-400">
                     逐课笔记 · 生成模型 {note.model}
+                    {note.source_id != null && (
+                      <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-emerald-700" title="笔记已登记进资料库，工作台对话/检索可直接引用">
+                        已入检索
+                      </span>
+                    )}
                   </div>
                   <Markdown text={note.content_md} />
                 </div>
