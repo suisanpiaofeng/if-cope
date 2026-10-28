@@ -29,6 +29,7 @@ export default function Sidebar({ configured }: { configured: boolean | null }) 
         <NavItem collapsed={collapsed} icon="translate" label="文献翻译" href="/translate" />
         <NavItem collapsed={collapsed} icon="solve" label="解题答疑" href="/solve" />
         <NavItem collapsed={collapsed} icon="tools" label="工具库" href="/tools" />
+        <NavItem collapsed={collapsed} icon="classroom" label="课堂" href="/classroom" />
         <SettingsItem collapsed={collapsed} onClick={() => setSettingsOpen(true)} />
       </nav>
 
@@ -63,7 +64,7 @@ function CollapseBtn({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
 }
 
 function NavItem({ href, label, icon, active, collapsed }: {
-  href: string; label: string; icon: "grid" | "settings" | "tools" | "solve" | "translate"; active?: boolean; collapsed?: boolean;
+  href: string; label: string; icon: "grid" | "settings" | "tools" | "solve" | "translate" | "classroom"; active?: boolean; collapsed?: boolean;
 }) {
   const pathname = usePathname();
   const on = active ?? pathname === href;
@@ -98,6 +99,11 @@ function NavItem({ href, label, icon, active, collapsed }: {
         <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
           <path d="M9.8 2.2a3.4 3.4 0 0 0-3.3 4.3L2.3 10.7a1.3 1.3 0 0 0 1.8 1.8l4.2-4.2a3.4 3.4 0 0 0 4.3-3.3l-1.9 1.9-1.8-.4-.4-1.8 1.9-1.9a3.5 3.5 0 0 0-.6-.6Z" />
           <circle cx="3.4" cy="12.6" r="0.6" fill="currentColor" stroke="none" />
+        </svg>
+      ) : icon === "classroom" ? (
+        <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+          <rect x="1.5" y="3" width="13" height="8.5" rx="1.2" />
+          <path d="M5.5 13.8h5M8 11.5v2.3" strokeLinecap="round" />
         </svg>
       ) : (
         <svg className="h-4 w-4 shrink-0 text-neutral-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
