@@ -1,5 +1,7 @@
 # CVS 回放「内置显示框」可行性验证
 
+> 2026-10-23 调研；**2026-11-04 清理：原型脚本（cvs-proxy.js / iframe-test.html / proxy-frame-test.html / stream-test.html）已删除**，下表为当时的实测结论存档（v2 的 revProxy.ts 即按此结论实现，正文见 git 历史）。
+
 > 2026-10-23 · 目标：确定 IF.Cope 的课程学习专区能否**内嵌显示** `cvs.seu.edu.cn` 回放，以及数据抓取通道怎么选。
 > 前置事实：平台在**校园内网**（`cvs.seu.edu.cn` → `10.64.86.180`，公网 DNS NXDOMAIN）。
 
