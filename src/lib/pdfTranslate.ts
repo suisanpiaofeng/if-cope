@@ -104,10 +104,10 @@ export function runPdf2zh(sourceId: number): Promise<{ translatedSourceId: numbe
               )?.category_id;
               const info = db
                 .prepare(
-                  `INSERT INTO sources (title, filename, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at)
-                   VALUES (?, ?, 'pdf', 'application/pdf', ?, ?, 'file', NULL, '翻译', ?, 'processing', ?)`
+                  `INSERT INTO sources (title, filename, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at, origin_id)
+                   VALUES (?, ?, 'pdf', 'application/pdf', ?, ?, 'file', NULL, '翻译', ?, 'processing', ?, ?)`
                 )
-                .run(`《${src.title.slice(0, 40)}》译文`, storageName, buffer.length, hash, cat, Date.now());
+                .run(`《${src.title.slice(0, 40)}》译文`, storageName, buffer.length, hash, cat, Date.now(), sourceId);
               translatedSourceId = Number(info.lastInsertRowid);
               await ingestSource(translatedSourceId); // 同步解析+嵌入（译文可被对话检索）
             }

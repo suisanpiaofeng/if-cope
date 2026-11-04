@@ -143,6 +143,13 @@ if (aigc) {
   }
 }
 
+/* 译文关联：sources.origin_id = 原文资源 id（type=翻译 的行专用），
+ * 供翻译历史打开「原文↔译文对照」预览；旧译文行无此列时回退单栏展示 */
+const srcCols = db.prepare("PRAGMA table_info(sources)").all() as { name: string }[];
+if (!srcCols.some((c) => c.name === "origin_id")) {
+  db.exec("ALTER TABLE sources ADD COLUMN origin_id INTEGER");
+}
+
 export type ModelSettings = {
   baseUrl: string;
   apiKey: string;

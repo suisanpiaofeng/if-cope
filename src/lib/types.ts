@@ -8,7 +8,9 @@ export type Source = {
   size: number;
   source_type: string;   // file | link
   url: string | null;
-  type: string;          // 课件 | 真题 | 笔记 | 录音 | 网页 | 其他
+  type: string;          // 课件 | 真题 | 笔记 | 录音 | 网页 | 翻译 | 其他
+  /** 译文专用：原文资源 id（type=翻译 时指向被翻译的那份；供历史打开原译对照） */
+  origin_id?: number | null;
   category_id: number | null;
   status: string;        // processing | ready | failed
   note: string | null;

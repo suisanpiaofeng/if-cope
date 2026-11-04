@@ -38,10 +38,9 @@ function looksEnglish(s: Source): boolean {
 }
 
 export default function TranslatePage() {
-  // 共享资源库：视图过滤 = 仅 PDF 且非译文（已是中文的译文不再进待翻列表）；勾选集即翻译选集
+  // 共享资源库：视图 = 全部 PDF（含已译文件——产物也是资源，翻译页同样展示）；勾选集即翻译选集
   const lib = useLibrary({
-    sourceFilter: (s) =>
-      s.source_type === "file" && s.ext.toLowerCase() === "pdf" && s.type !== "翻译",
+    sourceFilter: (s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf",
   });
   const { sources, categories, selected: picked } = lib;
   const [tabs, setTabs] = useState<TrTab[]>([]);
@@ -52,20 +51,20 @@ export default function TranslatePage() {
 
   const active = tabs.find((t) => t.key === activeKey) ?? null;
 
-  /** 翻译历史：新链路 = type=翻译 的资源（唯一一份，不在 AIGC 重复）；兼容旧产物（type=translation） */
+  /** 翻译历史：译文资源（唯一一份，origin_id 关联原文）+ 兼容旧产物；仅在本页展示，不进其他页 */
   const history = useMemo(() => {
     const fromSrc = lib.sources
       .filter((s) => s.type === "翻译")
-      .map((s) => ({ kind: "source" as const, id: s.id, title: s.title, created_at: s.created_at }));
+      .map((s) => ({ kind: "source" as const, id: s.id, title: s.title, created_at: s.created_at, originId: s.origin_id ?? null }));
     const fromArt = lib.artifacts
       .filter((a) => a.type === "translation")
-      .map((a) => ({ kind: "artifact" as const, id: a.id, title: a.title, created_at: a.created_at }));
+      .map((a) => ({ kind: "artifact" as const, id: a.id, title: a.title, created_at: a.created_at, originId: null as number | null }));
     return [...fromSrc, ...fromArt].sort((a, b) => b.created_at - a.created_at);
   }, [lib.sources, lib.artifacts]);
 
-  /** 可翻译：仅 PDF 且非译文（文件可用性由服务端校验） */
+  /** 资源列表：全部 PDF（已译文件带标记；批量翻译时自动跳过） */
   const translatable = useMemo(
-    () => sources.filter((s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf" && s.type !== "翻译"),
+    () => sources.filter((s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf"),
     [sources]
   );
   const englishPicks = translatable.filter(looksEnglish);
@@ -108,11 +107,18 @@ export default function TranslatePage() {
     busyRef.current = true;
     setError("");
     try {
+      let skipped = 0;
       for (const id of picked) {
         const s = sources.find((x) => x.id === id);
-        if (s) await runOne(s); // 串行：避免并发打爆翻译上游
+        if (!s) continue;
+        if (s.type === "翻译") {
+          skipped++; // 已是译文，重翻无意义：跳过并提示
+          continue;
+        }
+        await runOne(s); // 串行：避免并发打爆翻译上游
       }
       lib.clearSelection();
+      if (skipped > 0) setError(`已跳过 ${skipped} 个已翻译文件（译文已在资源目录，无需重翻）`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -121,8 +127,13 @@ export default function TranslatePage() {
     }
   }
 
-  /** 打开历史：新链路（译文资源）→ 单 PDF 视图；旧产物 → 兼容原逻辑（PDF 对照/文本双栏） */
-  async function openHistory(item: { kind: "source" | "artifact"; id: number; title: string }) {
+  /** 打开历史：译文资源 → 原文↔译文对照（origin_id 缺失时单栏）；旧产物 → 兼容原逻辑 */
+  async function openHistory(item: {
+    kind: "source" | "artifact";
+    id: number;
+    title: string;
+    originId?: number | null;
+  }) {
     const exist = tabs.find(
       (t) => (item.kind === "source" ? t.translatedSourceId === item.id : t.artifactId === item.id)
     );
@@ -134,7 +145,17 @@ export default function TranslatePage() {
       const key = `t${Date.now().toString(36)}${tabSeq++}`;
       setTabs((prev) => [
         ...prev,
-        { key, artifactId: null, sourceId: null, translatedSourceId: item.id, title: item.title, status: "done", progress: { done: 0, total: 0 }, doc: null, pdfMode: true },
+        {
+          key,
+          artifactId: null,
+          sourceId: item.originId ?? null, // 有原文关联 → 对照预览
+          translatedSourceId: item.id,
+          title: item.title,
+          status: "done",
+          progress: { done: 0, total: 0 },
+          doc: null,
+          pdfMode: true,
+        },
       ]);
       setActiveKey(key);
       return;
@@ -243,12 +264,24 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
             onMoveSource={lib.moveSource}
             onMoveArtifact={async () => {}}
             onOpenSource={(s) => lib.toggleSelect(s.id)}
-            sectionTitle="待翻译资源"
-            emptyText="暂无可翻译资源（先上传 PDF 并等待解析完成）"
-            sourceMeta={(s) => `PDF · ${s.chunk_count > 0 ? `${s.chunk_count} 段 · ` : ""}${new Date(s.created_at).toLocaleDateString("zh-CN")}`}
-            sourceRowClass={(s) => (looksEnglish(s) ? "border-l-2 border-l-blue-500" : "border-l-2 border-l-transparent")}
+            sectionTitle="资源（PDF）"
+            emptyText="暂无 PDF 资源（先上传并等待解析完成）"
+            sourceMeta={(s) =>
+              s.type === "翻译"
+                ? `已译 · ${s.chunk_count > 0 ? `${s.chunk_count} 段 · ` : ""}${new Date(s.created_at).toLocaleDateString("zh-CN")}`
+                : `PDF · ${s.chunk_count > 0 ? `${s.chunk_count} 段 · ` : ""}${new Date(s.created_at).toLocaleDateString("zh-CN")}`
+            }
+            sourceRowClass={(s) =>
+              s.type === "翻译"
+                ? "border-l-2 border-l-emerald-500"
+                : looksEnglish(s)
+                  ? "border-l-2 border-l-blue-500"
+                  : "border-l-2 border-l-transparent"
+            }
             sourceBadge={(s) =>
-              looksEnglish(s) ? (
+              s.type === "翻译" ? (
+                <span className="shrink-0 text-[10px] text-emerald-600" title="已翻译（批量翻译时自动跳过）">✓已译</span>
+              ) : looksEnglish(s) ? (
                 <span className="shrink-0 text-[10px]" title="疑似英文文献">🌐</span>
               ) : null
             }
@@ -290,7 +323,7 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
                       history.map((h) => (
                         <button
                           key={`${h.kind}${h.id}`}
-                          onClick={() => void openHistory(h)}
+                          onClick={() => void openHistory({ kind: h.kind, id: h.id, title: h.title, originId: h.originId })}
                           className="block w-full truncate px-2 py-1.5 text-left text-[11px] text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
                           title={h.title}
                         >
@@ -431,15 +464,22 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
               </div>
             )}
 
-            {/* 对照：新链路单 PDF / PDF 保真版（双 PDF）/ 文本双栏 */}
-            {active.doc && isPdfDoc(active.doc) ? (
+            {/* 对照：原文↔译文（新链路优先）/ 旧产物 PDF / 单栏译文 / 文本双栏 */}
+            {active.translatedSourceId != null && active.sourceId != null ? (
+              /* 历史或新翻完：译文资源 + 原文关联 → 原文↔译文对照 */
+              <PdfCompare
+                sourceId={active.sourceId}
+                artifactId={active.artifactId ?? 0}
+                translatedSourceId={active.translatedSourceId}
+              />
+            ) : active.doc && isPdfDoc(active.doc) ? (
               <PdfCompare
                 sourceId={active.sourceId ?? active.doc.sourceId}
                 artifactId={active.artifactId ?? 0}
                 translatedSourceId={active.doc.translatedSourceId ?? active.translatedSourceId ?? null}
               />
             ) : active.translatedSourceId != null ? (
-              /* 历史里的译文资源：单栏全文阅读（原文件在资源栏可随时点开对照） */
+              /* 历史里的译文资源（无原文关联，如旧数据）：单栏全文阅读 */
               <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
                 <div className="mb-2 flex items-center gap-3 text-[11px] text-neutral-500">
                   <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />中文译文（已在资源目录，可与原文并排打开对照）</span>
