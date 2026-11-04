@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
 import { retrieve, buildContextBlocks, Retrieved } from "@/lib/retrieval";
 import { streamChat, ChatMessage } from "@/lib/llm";
+import { webSearch, webHitsToContext, type WebHit } from "@/lib/webSearch";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -64,14 +65,24 @@ export async function POST(req: NextRequest) {
   const hits = await retrieve(question, sourceIds);
   const contextBlocks = buildContextBlocks(hits);
 
+  // ── 联网搜索（确定性预搜，不依赖模型主动调工具）：问题带时效性或资料库无命中时
+  //    服务端直接搜并注入上下文（与解题页 /api/ask 同策略；web_search 工具仍保留给追问链路）
+  const looksFresh = /新闻|最新|今天|今日|现在|目前|当前|最近|近年|20\d{2}|发生了什么|谁是现任|进展|热点|实时|汇率|股价|排名/.test(question);
+  const webHits: WebHit[] = question && (looksFresh || hits.length === 0) ? await webSearch(question) : [];
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
       try {
         send({ threadId: tid, citations: hits });
+        if (webHits.length) {
+          // 活动面板里展示「联网搜索」结果数（与工具活动同 UI）
+          send({ tool: { name: "web_search", phase: "done", detail: `已联网检索 ${webHits.length} 条参考` } });
+        }
         let full = "";
-        for await (const part of streamChat(question.trim(), contextBlocks, history, sourceIds)) {
+        const finalBlocks = webHits.length ? [...contextBlocks, webHitsToContext(webHits)] : contextBlocks;
+        for await (const part of streamChat(question.trim(), finalBlocks, history, sourceIds)) {
           if (part.tool) {
             send({ tool: part.tool });
           }

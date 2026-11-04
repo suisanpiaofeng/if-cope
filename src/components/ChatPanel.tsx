@@ -443,7 +443,7 @@ export default function ChatPanel({
               </div>
             )}
             {shown.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "flex justify-end" : ""}>
+              <div key={i} className={m.role === "user" ? "flex justify-end" : "group/msg relative"}>
                 <div className={
                   m.role === "user"
                     ? "max-w-[85%] rounded-xl bg-neutral-900 px-3.5 py-2 text-sm text-white"
@@ -453,6 +453,7 @@ export default function ChatPanel({
                     ? renderAssistant(m.content, m.citations ?? [], openCitation)
                     : m.content}
                 </div>
+                {m.role === "assistant" && <CopyBtn text={m.content} />}
               </div>
             ))}
             {liveOpen && <div className="text-xs text-neutral-400">正在结合资料回答…</div>}
@@ -559,3 +560,25 @@ function renderAssistant(content: string, citations: Citation[], onOpen: (c: Cit
   });
 }
 
+
+/** 回答气泡的悬停复制按钮：贴右上角，悬停显现；复制原文（Markdown 源码，非渲染文本） */
+function CopyBtn({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+          .catch(() => {});
+      }}
+      title="复制回答（Markdown）"
+      className="absolute -top-1 right-0 rounded-md border border-neutral-200 bg-white px-1.5 py-0.5 text-[10px] text-neutral-400 opacity-0 shadow-sm transition-opacity hover:text-neutral-900 group-hover/msg:opacity-100"
+    >
+      {copied ? "✓" : "⧉ 复制"}
+    </button>
+  );
+}

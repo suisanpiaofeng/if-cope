@@ -27,6 +27,7 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
   const n = data.node;
   const [asking, setAsking] = useState(false);
   const [text, setText] = useState("");
+  const [copied, setCopied] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
 
@@ -74,6 +75,16 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
     setText("");
     setAsking(false);
     data.onFollowUp(n.id, q);
+  }
+
+  async function copyAnswer() {
+    try {
+      await navigator.clipboard.writeText(`## ${n.title}\n\n${n.answer}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* 剪贴板不可用（非安全上下文）：静默 */
+    }
   }
 
   // 按文件合并引用（同一文件多个分块会重复出现；页码聚合，兼容历史数据）
@@ -156,6 +167,16 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
             className="nodrag rounded px-1.5 py-0.5 text-[10px] text-neutral-400 hover:bg-red-50 hover:text-red-600"
           >
             删除
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void copyAnswer();
+            }}
+            title="复制标题+答案（Markdown）"
+            className="nodrag rounded px-1.5 py-0.5 text-[10px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900"
+          >
+            {copied ? "✓ 已复制" : "⧉ 复制"}
           </button>
           <button
             ref={toggleRef}
