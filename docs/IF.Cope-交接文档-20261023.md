@@ -187,7 +187,7 @@ embed_meta(key PK, value)  -- embed_dim 自愈（启动时对首条向量校验�
 
 **iframe ↔ 宿主页通信**（`cookieRewrite.ts` 注入脚本）：反代给 HTML 注入 `<script data-ifcope-frame-nav>`，职责：① 收敛跳出（window.open/_blank → iframe 内跳转）；② 用 postMessage（source: `ifcope-frame`，目标 origin 3777）向宿主页上报 `nav`（当前 URL/标题，鉤 pushState+1s 轮询）与 `auth`（同源 fetch `/__whoami`，每 5s）。宿主页 `page.tsx` 用 nav 上报维护 navUrlRef，「重载」据此保持当前页（不回首页）。tecl 捕获与自动登记已随旧功能移除。排查：宿主页 F12 Console 看 `message` 事件是否到达（注意宿主页校验了 `e.origin === http://localhost:3778`，改反代端口要同步改注入脚本里的 `TOP` 常量）。
 
-**AIGC 目录已移除（2026-11-04）**：不再有固定的 AIGC 类目；所有产物（笔记/知识地图/翻译）默认落「未归类」，可拖入任意类目。db.ts 启动时自动迁移（解散 pinned=1 或名为 AIGC 的类目：内容回未归类、子类目提顶级、删行）。PDF 译文更进一步：直接入库为资源（type=翻译，与原文同类目），不再造产物行，历史由翻译页从资源推导（兼容旧产物）。 已删。
+**AIGC 目录已移除（2026-11-04）**：不再有固定的 AIGC 类目；所有产物（笔记/知识地图/翻译）默认落「未归类」，可拖入任意类目。db.ts 启动时自动迁移（解散 pinned=1 或名为 AIGC 的类目：内容回未归类、子类目提顶级、删行）。PDF 译文更进一步：直接入库为资源（type=翻译，与原文同类目），不再造产物行，历史由翻译页从资源推导（兼容旧产物）。getAigcCategoryId 函数已删除。
 
 **资源栏统一（2026-10-30）**：第二栏数据/操作单点在 `src/lib/useLibrary.ts`（取数、勾选、上传/链接/文本、删/建/移类目、拖拽移动），工作台/翻译/解题三页共用；`FilesPanel` 加视图 props（传入预过滤数据 + `topSlot/bottomSlot/topBarExtra` 插槽 + `sourceMeta/sourceBadge/sourceRowClass` 行级定制）。翻译页视图=仅 PDF（蓝色左界+🌐 高亮疑似英文），解题页视图=仅 ready（地图管理挂 topSlot，勾选集即问答依据）。改资源栏只动这两处，三页同时生效。
 
