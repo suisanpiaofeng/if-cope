@@ -17,14 +17,17 @@ import {
   PORT,
   CVS_HOST,
   CAS_HOSTS,
-  CAS_LOGIN_PATH,
+  prefixForHost,
   rewriteSetCookie,
   rewriteLocation,
+  rewriteBodyText,
+  injectFrameNavScript,
 } from "./cookieRewrite";
 
-/** /__whoami 探测用的官方接口路径（真机联调确认：选一个未登录必 302 到 CAS 或 401 的轻量接口。
- *  注意不能用首页——未登录也 200 会误判已登录） */
-const WHOAMI_PATH = "/api/user/info";
+/** /__whoami 探测用的官方接口（真机实测：未登录 401，登录后 200） */
+const WHOAMI_PATH = "/jy-application-resourcemanage/v1/web/login/acknowledge";
+/** CVS 前端首页（登录入口：加载它即可触发官方自己的认证跳转链） */
+const SPA_HOME = "/jy-application-resourcemanage-ui/";
 
 /** 剥掉的响应头（本地转发场景由我们自己说了算；Set-Cookie 不剥——登录态靠它落 localhost） */
 const STRIP = new Set([
@@ -57,20 +60,18 @@ function manualCookie(): string {
   }
 }
 
-/** 响应体改写：仅 HTML/JS（官方页写死的绝对地址 → 反代地址） */
-function rewriteBody(body: Buffer, contentType: string): Buffer {
+/** 响应体改写：HTML/JS/JSON 里的校内绝对地址 → 反代地址（动态域，见 rewriteBodyText） */
+function rewriteBody(body: Buffer, contentType: string, currentHost: string): Buffer {
   const ct = contentType.toLowerCase();
-  if (!ct.includes("text/html") && !ct.includes("javascript")) return body;
-  let text = body.toString("utf8");
-  // CAS 域先替换（避免被 CVS 规则误伤）
-  for (const host of CAS_HOSTS) {
-    text = text.split(`https://${host}`).join(`${ORIGIN}/__cas`);
-    text = text.split(`http://${host}`).join(`${ORIGIN}/__cas`);
-    text = text.split(`//${host}`).join(`${ORIGIN}/__cas`);
-  }
-  text = text.split(`https://${CVS_HOST}`).join(ORIGIN);
-  text = text.split(`http://${CVS_HOST}`).join(ORIGIN);
-  text = text.split(`//${CVS_HOST}`).join(ORIGIN);
+  const rewritable =
+    ct.includes("text/html") ||
+    ct.includes("javascript") ||
+    ct.includes("json") || // 登录后 token/跳转常在 JSON 里返回绝对地址
+    ct.includes("x-www-form-urlencoded");
+  if (!rewritable) return body;
+  let text = rewriteBodyText(body.toString("utf8"), currentHost);
+  // HTML 额外注入导航收敛脚本：官方页用 target="_blank"/window.open 开课程，iframe 里会弹新标签页
+  if (ct.includes("text/html")) text = injectFrameNavScript(text);
   return Buffer.from(text, "utf8");
 }
 
@@ -83,13 +84,17 @@ function fail(res: http.ServerResponse, msg: string): void {
   res.end(msg);
 }
 
-/** 一次上游请求（不自动跟随重定向——重定向由 rewriteLocation 接管；15s 超时防校园网卡死把 UI 拖住） */
+/** 一次上游请求（不自动跟随重定向——重定向由 rewriteLocation 接管；15s 超时防校园网卡死把 UI 拖住）。
+ *  注意：调用方传的是 host（目标主机），Node 的 https.request 需要 hostname（host 是本地接口地址，
+ *  传 host 会连到 localhost 导致 ECONNRESET）。这里统一映射。 */
 function upstreamRequest(
   opts: { host: string; path: string; method: string; headers: http.OutgoingHttpHeaders },
   body: Buffer | null
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer | null }> {
   return new Promise((resolve, reject) => {
-    const req = https.request(opts, (ures) => {
+    const req = https.request(
+      { hostname: opts.host, path: opts.path, method: opts.method, headers: opts.headers, port: 443, servername: opts.host },
+      (ures) => {
       if ([301, 302, 303, 307, 308].includes(ures.statusCode ?? 0)) {
         ures.resume();
         resolve({ status: ures.statusCode!, headers: ures.headers, body: null });
@@ -128,7 +133,7 @@ function buildHeaders(req: http.IncomingMessage, host: string, path: string): ht
 async function forward(
   res: http.ServerResponse,
   up: { status: number; headers: http.IncomingHttpHeaders; body: Buffer | null },
-  opts: { isCas: boolean }
+  opts: { isCas: boolean; host?: string; prefix?: string }
 ): Promise<void> {
   const out: http.OutgoingHttpHeaders = {};
   for (const [k, v] of Object.entries(up.headers)) {
@@ -145,17 +150,20 @@ async function forward(
     let loc = rewriteLocation(String(up.headers.location));
     // CAS 站内相对跳转：补 /__cas 前缀（否则会打回 CVS_HOST）
     if (loc === null) {
-      fail(res, "登录跳转指向未知域名，已阻止（反代不透传外部跳转）");
+      const rawLoc = String(up.headers.location);
+      console.warn(`[cvs-proxy] 阻止外域跳转: ${rawLoc}（来自 ${opts.host ?? CVS_HOST}）`);
+      fail(res, `登录跳转指向未知域名，已阻止：${rawLoc.slice(0, 160)}`);
       return;
     }
-    if (opts.isCas && loc.startsWith("/")) loc = `/__cas${loc}`;
+    const prefix = opts.prefix ?? (opts.isCas ? "/__cas" : "");
+    if (prefix && loc.startsWith("/")) loc = `${prefix}${loc}`;
     out.location = loc;
   }
   Object.assign(out, CORS);
   let body = up.body;
   if (body) {
     const ct = String(up.headers["content-type"] ?? "");
-    body = rewriteBody(body, ct);
+    body = rewriteBody(body, ct, opts.host ?? CVS_HOST);
     out["content-length"] = body.length;
   }
   res.writeHead(up.status, out);
@@ -172,10 +180,19 @@ async function proxyHandler(req: http.IncomingMessage, res: http.ServerResponse)
     return;
   }
 
-  // 登录入口：302 到 CAS 登录页（经 /__cas 前缀）
+  // 登录入口：不猜任何认证路径——302 到 CVS 官网，SPA 自己会跳到
+  // 「东南大学身份认证中心」登录页（真实探测：整条 OAuth 链经反代完好，
+  //  return_uri 自动带 localhost:3778，登录后回跳反代）
   if (url === "/__login") {
-    res.writeHead(302, { location: `/__cas${CAS_LOGIN_PATH}`, ...CORS });
+    res.writeHead(302, { location: SPA_HOME, ...CORS });
     res.end();
+    return;
+  }
+
+  // 版本哨兵：验证 3778 上跑的确实是最新编译（多轮重启曾遇旧进程残留）
+  if (url === "/__canary") {
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8", ...CORS });
+    res.end("proxy-v8-minimal-20261030");
     return;
   }
 
@@ -200,15 +217,53 @@ async function proxyHandler(req: http.IncomingMessage, res: http.ServerResponse)
     return;
   }
 
-  // CAS 前缀路由
+  // CAS 前缀路由（登录 POST 的请求体必须转发，否则认证服务器收到空请求回「系统繁忙」）
   if (url.startsWith("/__cas/")) {
     const casPath = url.slice("/__cas".length) || "/";
     try {
+      const headers = buildHeaders(req, CAS_HOSTS[0], casPath);
+      let body: Buffer | null = null;
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        const chunks: Buffer[] = [];
+        for await (const c of req) chunks.push(c as Buffer);
+        body = chunks.length ? Buffer.concat(chunks) : null;
+        if (body) headers["content-length"] = body.length;
+      }
       const up = await upstreamRequest(
-        { host: CAS_HOSTS[0], path: casPath, method: req.method ?? "GET", headers: buildHeaders(req, CAS_HOSTS[0], casPath) },
-        null
+        { host: CAS_HOSTS[0], path: casPath, method: req.method ?? "GET", headers },
+        body
       );
-      await forward(res, up, { isCas: true });
+      await forward(res, up, { isCas: true, host: CAS_HOSTS[0], prefix: "/__cas" });
+    } catch (e) {
+      fail(res, `代理错误：${e instanceof Error ? e.message : String(e)}（确认本机在校园网/VPN 内）`);
+    }
+    return;
+  }
+
+  // 动态校内域路由：/__h/<host>/... → https://<host>/...
+  // 覆盖登录后跳转链经过的任意 *.seu.edu.cn（ids/cas/cloud-rbac 等），不必枚举
+  if (url.startsWith("/__h/")) {
+    const rest = url.slice("/__h/".length);
+    const slash = rest.indexOf("/");
+    const host = slash === -1 ? rest : rest.slice(0, slash);
+    const subPath = slash === -1 ? "/" : rest.slice(slash);
+    const prefix = `/__h/${host}`;
+    const upstreamHost = prefixForHost(host);
+    if (upstreamHost === null) {
+      fail(res, `已阻止非校内域代理请求：${host}`);
+      return;
+    }
+    try {
+      const headers = buildHeaders(req, host, subPath);
+      let body: Buffer | null = null;
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        const chunks: Buffer[] = [];
+        for await (const c of req) chunks.push(c as Buffer);
+        body = chunks.length ? Buffer.concat(chunks) : null;
+        if (body) headers["content-length"] = body.length;
+      }
+      const up = await upstreamRequest({ host, path: subPath, method: req.method ?? "GET", headers }, body);
+      await forward(res, up, { isCas: false, host, prefix });
     } catch (e) {
       fail(res, `代理错误：${e instanceof Error ? e.message : String(e)}（确认本机在校园网/VPN 内）`);
     }

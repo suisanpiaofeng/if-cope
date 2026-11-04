@@ -6,12 +6,13 @@
  * 多选 → 批量翻译（SSE 逐批进度）→ 右侧双文对照（原文/译文逐段对齐）；
  * 每个文件一个标签可并存；产物下载 HTML（双栏可打印）/ Markdown。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Sidebar from "@/components/Sidebar";
-import UploadModal from "@/components/UploadModal";
+import FilesPanel from "@/components/FilesPanel";
 import type { AnyTranslationDoc, Source, TranslationDoc } from "@/lib/types";
 import { isPdfDoc } from "@/lib/types";
+import { useLibrary } from "@/lib/useLibrary";
 
 type TrTab = {
   key: string;
@@ -26,8 +27,6 @@ type TrTab = {
   error?: string;
 };
 
-type HistoryItem = { id: number; title: string; created_at: number };
-
 let tabSeq = 1;
 
 /** 疑似英文文献：标题里拉丁字母占比高（翻译功能的主攻对象，高亮提示） */
@@ -37,94 +36,34 @@ function looksEnglish(s: Source): boolean {
 }
 
 export default function TranslatePage() {
-  const [sources, setSources] = useState<Source[]>([]);
-  const [picked, setPicked] = useState<Set<number>>(new Set());
-  const [history, setHistory] = useState<HistoryItem[]>([]);
+  // 共享资源库：视图过滤 = 仅 PDF（本功能只做保真双语翻译）；勾选集即翻译选集
+  const lib = useLibrary({
+    sourceFilter: (s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf",
+  });
+  const { sources, categories, selected: picked } = lib;
   const [tabs, setTabs] = useState<TrTab[]>([]);
   const [activeKey, setActiveKey] = useState("");
   const [batchBusy, setBatchBusy] = useState(false);
   const [error, setError] = useState("");
-  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
-  const [uploadOpen, setUploadOpen] = useState(false);
   const busyRef = useRef(false);
 
   const active = tabs.find((t) => t.key === activeKey) ?? null;
 
-  const loadHistory = useCallback(() => {
-    fetch("/api/artifacts?categoryId=all")
-      .then((r) => r.json())
-      .then((d) => setHistory((d.artifacts ?? []).filter((a: { type: string }) => a.type === "translation")));
-  }, []);
+  /** 翻译历史 = 产物里 type=translation（共享 hook 已拉全量产物，无需另拉） */
+  const history = useMemo(
+    () => lib.artifacts.filter((a) => a.type === "translation"),
+    [lib.artifacts]
+  );
 
-  const loadSources = useCallback(() => {
-    fetch("/api/sources")
-      .then((r) => r.json())
-      .then((d) => {
-        setSources(d.sources ?? []);
-        setCategories(d.categories ?? []);
-      });
-  }, []);
-
-  useEffect(() => {
-    loadSources();
-    loadHistory();
-  }, [loadSources, loadHistory]);
-
-  /** 可翻译：仅 PDF（本功能只做保真双语翻译；文件可用性由服务端校验） */
+  /** 可翻译：仅 PDF（文件可用性由服务端校验） */
   const translatable = useMemo(
     () => sources.filter((s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf"),
     [sources]
   );
   const englishPicks = translatable.filter(looksEnglish);
 
-  function toggle(id: number) {
-    setPicked((prev) => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-  }
-
   function patchTab(key: string, partial: Partial<TrTab>) {
     setTabs((prev) => prev.map((t) => (t.key === key ? { ...t, ...partial } : t)));
-  }
-
-  /** 导入资料：上传/链接/文本入库，成功后刷新资源列表 */
-  async function doUpload(files: File[], categoryId: number | null) {
-    for (const f of files) {
-      const fd = new FormData();
-      fd.append("file", f);
-      if (categoryId != null) fd.append("categoryId", String(categoryId));
-      fd.append("type", "课件");
-      const res = await fetch("/api/sources", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) setError(data.error ?? `《${f.name}》上传失败`);
-      else if (data.duplicate) setError(data.message);
-    }
-    loadSources();
-  }
-
-  async function doAddLink(url: string, categoryId: number | null) {
-    const res = await fetch("/api/sources", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, categoryId: categoryId ?? undefined }),
-    });
-    const data = await res.json();
-    if (data.error) setError(data.error);
-    else if (data.duplicate) setError(data.message);
-    loadSources();
-  }
-
-  async function doAddText(text: string, categoryId: number | null) {
-    const res = await fetch("/api/sources", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, categoryId: categoryId ?? undefined }),
-    });
-    const data = await res.json();
-    if (data.error) setError(data.error);
-    else if (data.duplicate) setError(data.message);
-    loadSources();
   }
 
   const runOne = useCallback(
@@ -145,12 +84,12 @@ export default function TranslatePage() {
         const d = (await res.json()) as { error?: string; artifactId?: number; doc?: AnyTranslationDoc };
         if (!res.ok || !d.doc || d.artifactId == null) throw new Error(d.error || `HTTP ${res.status}`);
         patchTab(key, { status: "done", artifactId: d.artifactId, doc: d.doc });
-        loadHistory();
+        void lib.load();
       } catch (e) {
         patchTab(key, { status: "error", error: e instanceof Error ? e.message : String(e) });
       }
     },
-    [loadHistory] // eslint-disable-line react-hooks/exhaustive-deps
+    [lib.load] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   async function startBatch() {
@@ -163,7 +102,7 @@ export default function TranslatePage() {
         const s = sources.find((x) => x.id === id);
         if (s) await runOne(s); // 串行：避免并发打爆翻译上游
       }
-      setPicked(new Set());
+      lib.clearSelection();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -251,93 +190,98 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
     <div className="flex h-screen overflow-hidden bg-white">
       <Sidebar configured={null} />
 
-      {/* 左栏：可翻译资源 + 历史 */}
-      <div className="flex w-[280px] shrink-0 flex-col border-r border-neutral-200">
+      {/* 左栏：共享资源栏（视图 = 仅 PDF）+ 翻译历史 */}
+      <div className="flex w-[280px] shrink-0 flex-col">
         <div className="border-b border-neutral-200 px-4 py-3">
           <div className="text-[15px] font-semibold tracking-tight">文献翻译</div>
           <div className="mt-0.5 text-[11px] text-neutral-400">多选 → 批量翻译 · 双文对照 · 可下载</div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 py-3">
-          {error && (
-            <div className="mb-2 border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{error}</div>
-          )}
+        {error && (
+          <div className="mx-3 mt-2 border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{error}</div>
+        )}
+        <div className="min-h-0 flex-1">
+          <FilesPanel
+            sources={translatable}
+            artifacts={[]}
+            categories={categories}
+            genError={null}
+            selected={picked}
+            selectedArts={new Set()}
+            onToggleSource={lib.toggleSelect}
+            onToggleArtifact={() => {}}
+            onToggleFolder={lib.toggleFolderSelect}
+            onToggleAll={lib.toggleSelectAll}
+            onUpload={lib.upload}
+            onAddLink={lib.addLink}
+            onAddText={lib.addText}
+            onDeleteSource={lib.removeSource}
+            onDeleteArtifact={async () => {}}
+            onDeleteCategory={lib.removeCategory}
+            onNewCategory={lib.newCategory}
+            onMoveSource={lib.moveSource}
+            onMoveArtifact={async () => {}}
+            onOpenSource={(s) => lib.toggleSelect(s.id)}
+            onOpenArtifact={() => {}}
+            sectionTitle="待翻译资源"
+            emptyText="暂无可翻译资源（先上传 PDF 并等待解析完成）"
+            sourceMeta={(s) => `PDF · ${s.chunk_count > 0 ? `${s.chunk_count} 段 · ` : ""}${new Date(s.created_at).toLocaleDateString("zh-CN")}`}
+            sourceRowClass={(s) => (looksEnglish(s) ? "border-l-2 border-l-blue-500" : "border-l-2 border-l-transparent")}
+            sourceBadge={(s) =>
+              looksEnglish(s) ? (
+                <span className="shrink-0 text-[10px]" title="疑似英文文献">🌐</span>
+              ) : null
+            }
+            topBarExtra={
+              <>
+                <button
+                  onClick={() => lib.selectOnly(englishPicks.map((s) => s.id))}
+                  className="text-[11px] text-neutral-400 hover:text-neutral-900"
+                  title="只选中疑似英文文献"
+                >
+                  选英文文献
+                </button>
+                <button
+                  onClick={lib.clearSelection}
+                  className="text-[11px] text-neutral-400 hover:text-neutral-900"
+                >
+                  清空
+                </button>
+              </>
+            }
+            bottomSlot={
+              <div className="border-t border-neutral-200 px-3 py-3">
+                <button
+                  onClick={startBatch}
+                  disabled={batchBusy || picked.size === 0}
+                  className="w-full border border-neutral-900 bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-700 disabled:opacity-40"
+                >
+                  {batchBusy ? "批量翻译中…" : picked.size > 0 ? `翻译选中的 ${picked.size} 份` : "勾选资源开始翻译"}
+                </button>
 
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-              待翻译资源 <span className="num">{translatable.length}</span>
-            </span>
-            <div className="flex gap-1 text-[11px]">
-              <button onClick={() => setUploadOpen(true)} className="text-neutral-400 hover:text-neutral-900">＋导入</button>
-              <button
-                onClick={() => setPicked(new Set(englishPicks.map((s) => s.id)))}
-                className="text-neutral-400 hover:text-neutral-900"
-                title="只选中疑似英文文献"
-              >
-                选英文文献
-              </button>
-              <button onClick={() => setPicked(new Set())} className="text-neutral-400 hover:text-neutral-900">
-                清空
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-1 min-h-0 flex-1 overflow-y-auto border border-neutral-100">
-            {translatable.length === 0 ? (
-              <p className="px-2 py-2 text-[11px] text-neutral-300">暂无可翻译资源（先去工作台上传并等待解析完成）</p>
-            ) : (
-              translatable.map((s) => {
-                const en = looksEnglish(s);
-                return (
-                  <label
-                    key={s.id}
-                    className={`flex cursor-pointer items-center gap-1.5 px-2 py-1.5 text-[11px] hover:bg-neutral-50 ${
-                      picked.has(s.id) ? "bg-neutral-100" : ""
-                    } ${en ? "border-l-2 border-l-blue-500" : "border-l-2 border-l-transparent"}`}
-                    title={en ? "疑似英文文献（高亮）" : undefined}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={picked.has(s.id)}
-                      onChange={() => toggle(s.id)}
-                      className="accent-neutral-900"
-                    />
-                    <span className="min-w-0 flex-1 truncate text-neutral-700">{s.title}</span>
-                    {en && <span className="shrink-0 text-[10px]" title="疑似英文文献">🌐</span>}
-                  </label>
-                );
-              })
-            )}
-          </div>
-
-          <button
-            onClick={startBatch}
-            disabled={batchBusy || picked.size === 0}
-            className="mt-2 shrink-0 border border-neutral-900 bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-700 disabled:opacity-40"
-          >
-            {batchBusy ? "批量翻译中…" : picked.size > 0 ? `翻译选中的 ${picked.size} 份` : "勾选资源开始翻译"}
-          </button>
-
-          <div className="mt-4 max-h-[35%] shrink-0 overflow-y-auto">
-            <div className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-              历史翻译 <span className="num">{history.length}</span>
-            </div>
-            <div className="mt-1 space-y-0.5">
-              {history.length === 0 ? (
-                <p className="px-1 py-1 text-[11px] text-neutral-300">暂无</p>
-              ) : (
-                history.map((h) => (
-                  <button
-                    key={h.id}
-                    onClick={() => void openHistory(h.id)}
-                    className="block w-full truncate px-2 py-1.5 text-left text-[11px] text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
-                    title={h.title}
-                  >
-                    📖 {h.title}
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
+                <div className="mt-4 max-h-[240px] overflow-y-auto">
+                  <div className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                    历史翻译 <span className="num">{history.length}</span>
+                  </div>
+                  <div className="mt-1 space-y-0.5">
+                    {history.length === 0 ? (
+                      <p className="px-1 py-1 text-[11px] text-neutral-300">暂无</p>
+                    ) : (
+                      history.map((h) => (
+                        <button
+                          key={h.id}
+                          onClick={() => void openHistory(h.id)}
+                          className="block w-full truncate px-2 py-1.5 text-left text-[11px] text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
+                          title={h.title}
+                        >
+                          📖 {h.title}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            }
+          />
         </div>
       </div>
 
@@ -508,17 +452,6 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
           </>
         )}
       </main>
-
-      {/* 导入资料弹窗 */}
-      <UploadModal
-        open={uploadOpen}
-        defaultCategoryId={null}
-        categories={categories}
-        onClose={() => setUploadOpen(false)}
-        onUpload={doUpload}
-        onAddLink={doAddLink}
-        onAddText={doAddText}
-      />
     </div>
   );
 }

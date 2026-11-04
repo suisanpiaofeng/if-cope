@@ -22,6 +22,7 @@ export function buildSystemPrompt(selectedSourceIds: number[]): string {
 ${listToolsText()}
 调用原则：
 - 学生让你**移动/归类/生成笔记/查看库结构/读某份资料全文**时，直接调用工具执行，不要只给操作指引。
+- 问题**带时效性**（新闻/最新/进展/汇率/今天几号等）或**资料库完全没讲到**时，先 web_search 再回答，回答末尾附上参考链接；搜索失败就用已有知识回答并告知未能联网。
 - 工具结果就是真实执行结果，如实转告学生；失败了就说明原因。
 - 只是资料内容问答时不需要调用工具，直接基于资料片段回答。
 
@@ -35,7 +36,8 @@ function listToolsText(): string {
 3. move_source — 把资料移动到指定类目（null = 未归类）
 4. move_artifact — 把产物移动到指定类目（null = 未归类）
 5. create_category — 新建类目
-6. generate_summary — 基于若干资料生成复习笔记（产物自动存入 AIGC）`;
+6. generate_summary — 基于若干资料生成复习笔记（产物自动存入 AIGC）
+7. web_search — 联网搜索（时效性问题/资料库没讲到的知识/实时数据）`;
 }
 
 function buildLibraryState(selectedSourceIds: number[]): string {

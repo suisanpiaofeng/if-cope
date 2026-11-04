@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { Source } from "@/lib/types";
 import UploadModal from "./UploadModal";
 import { DND_MIME, readDnd, type DndPayload } from "@/lib/dnd";
@@ -80,7 +80,9 @@ function SubCatIcon() {
   );
 }
 
-/** 第二栏：类目树（AIGC + 普通类目 + 未归类），支持勾选、拖拽移动、上传 */
+/** 第二栏：类目树（AIGC + 普通类目 + 未归类），支持勾选、拖拽移动、上传。
+ *  各页视图差异通过 props 实现：传入预过滤的 sources/artifacts（翻译页只传 PDF、解题页只传 ready），
+ *  特有区块用插槽挂载（topSlot=解题页地图管理，bottomSlot=翻译历史/批量按钮，topBarExtra=页内快捷钮）。 */
 export default function FilesPanel({
   sources, artifacts, categories, genError, selected, selectedArts,
   onToggleSource, onToggleFolder, onToggleAll, onToggleArtifact,
@@ -88,6 +90,9 @@ export default function FilesPanel({
   onDeleteSource, onDeleteArtifact, onDeleteCategory, onNewCategory,
   onMoveSource, onMoveArtifact,
   onOpenSource, onOpenArtifact,
+  sectionTitle = "资源",
+  topSlot, bottomSlot, topBarExtra, emptyText,
+  sourceMeta, sourceBadge, sourceRowClass,
 }: {
   sources: Source[];
   artifacts: Artifact[];
@@ -111,6 +116,22 @@ export default function FilesPanel({
   onMoveArtifact: (ids: number[], categoryId: number | null) => Promise<void>;
   onOpenSource: (s: Source) => void;
   onOpenArtifact: (a: Artifact) => void;
+  /** 区块标题（默认「资源」；翻译页传「待翻译资源」等） */
+  sectionTitle?: string;
+  /** 资源区上方插槽（解题页：知识地图管理） */
+  topSlot?: ReactNode;
+  /** 资源区下方插槽（翻译页：批量翻译按钮 + 历史；解题页：提示语） */
+  bottomSlot?: ReactNode;
+  /** 顶栏（全选/上传那行）中间插槽：页内快捷钮（选英文文献/清空等） */
+  topBarExtra?: ReactNode;
+  /** 资源为空时的提示文案 */
+  emptyText?: string;
+  /** 资源行副标题定制（默认「类型 · N块 · 时间」；翻译页可改为只显示 PDF 标识） */
+  sourceMeta?: (s: Source) => ReactNode;
+  /** 资源行尾部徽标（如翻译页的疑似英文文献 🌐） */
+  sourceBadge?: (s: Source) => ReactNode;
+  /** 资源行附加样式（如翻译页的蓝色左边界高亮） */
+  sourceRowClass?: (s: Source) => string;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [dragOver, setDragOver] = useState<FolderId | null>(null);
@@ -252,27 +273,34 @@ export default function FilesPanel({
           <Check state={allState} onClick={(e) => { e.stopPropagation(); onToggleAll(); }} title="全选" />
           全选
         </label>
-        <button onClick={() => openUpload(null)}
-          className="rounded-md bg-neutral-900 px-2 py-1 text-[11px] font-medium text-white hover:bg-neutral-700">
-          ＋ 上传
-        </button>
+        <div className="flex items-center gap-2">
+          {topBarExtra}
+          <button onClick={() => openUpload(null)}
+            className="rounded-md bg-neutral-900 px-2 py-1 text-[11px] font-medium text-white hover:bg-neutral-700">
+            ＋ 上传
+          </button>
+        </div>
       </div>
 
       {genError && (
         <div className="mx-3 mt-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{genError}</div>
       )}
 
+      {topSlot}
+
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex items-center justify-between px-3 pt-2.5 pb-1">
           <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-            资源 <span className="num">{sources.length}</span>
+            {sectionTitle} <span className="num">{sources.length}</span>
           </span>
           <button onClick={() => { setNewCatParent(null); setCatOpen(true); }} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋ 新建类目</button>
         </div>
 
         {/* 类目树 */}
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-          {folders.map((f) => {
+          {sources.length + artifacts.length === 0 && emptyText ? (
+            <p className="px-2 py-2 text-[11px] text-neutral-300">{emptyText}</p>
+          ) : folders.map((f) => {
             const key = String(f.id);
             const isOpen = expanded.has(key);
             const srcs = folderSources(f.id);
@@ -336,15 +364,20 @@ export default function FilesPanel({
                         title={s.note ?? undefined}
                         className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-neutral-50 ${
                           selected.has(s.id) ? "bg-neutral-100" : ""
-                        }`}>
+                        } ${sourceRowClass?.(s) ?? ""}`}>
                         <Check state={selected.has(s.id) ? "on" : "off"} title="选中用于对话"
                           onClick={(e) => { e.stopPropagation(); onToggleSource(s.id); }} />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-[13px] leading-4 text-neutral-700">{s.title}</div>
-                          <div className="num mt-0.5 text-[10px] text-neutral-400">
-                            {s.type} · {s.chunk_count > 0 ? `${s.chunk_count} 块 · ` : ""}{timeAgo(s.created_at)}
-                          </div>
+                          {sourceMeta ? (
+                            <div className="num mt-0.5 text-[10px] text-neutral-400">{sourceMeta(s)}</div>
+                          ) : (
+                            <div className="num mt-0.5 text-[10px] text-neutral-400">
+                              {s.type} · {s.chunk_count > 0 ? `${s.chunk_count} 块 · ` : ""}{timeAgo(s.created_at)}
+                            </div>
+                          )}
                         </div>
+                        {sourceBadge?.(s)}
                         <button
                           onClick={(e) => { e.stopPropagation(); onDeleteSource(s.id); }}
                           title="删除"
@@ -391,6 +424,8 @@ export default function FilesPanel({
           })}
         </div>
       </div>
+
+      {bottomSlot}
 
       {/* 上传弹窗 */}
       <UploadModal

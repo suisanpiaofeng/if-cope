@@ -19,7 +19,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import Sidebar from "@/components/Sidebar";
-import UploadModal from "@/components/UploadModal";
+import FilesPanel from "@/components/FilesPanel";
 import QAMapCard, { type QaMapRFNode } from "@/components/qa-map/QAMapCard";
 import EdgesOverlay from "@/components/qa-map/EdgesOverlay";
 import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
@@ -32,6 +32,7 @@ import {
   type QaMapNode,
 } from "@/lib/qaMapTypes";
 import type { Source } from "@/lib/types";
+import { useLibrary } from "@/lib/useLibrary";
 
 const nodeTypes = { qaCard: QAMapCard };
 
@@ -42,8 +43,6 @@ type MapTab = {
   nodes: QaMapNode[];
   selectedId: string | null;
 };
-
-type HistoryItem = { id: number; title: string; created_at: number };
 
 let tabSeq = 1;
 const newTab = (): MapTab => ({
@@ -62,12 +61,10 @@ export default function SolvePage() {
   const [image, setImage] = useState<{ dataUrl: string; name: string } | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [saveState, setSaveState] = useState("已保存");
-  const [sources, setSources] = useState<Source[]>([]);
-  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [contextIds, setContextIds] = useState<Set<number>>(new Set());
+  // 共享资源库：视图过滤 = 仅 ready；勾选集即问答依据（可拖入下方对话框）
+  const lib = useLibrary({ sourceFilter: (s) => s.status === "ready" });
+  const { sources, categories, selected: contextIds } = lib;
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [dropOver, setDropOver] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<{
@@ -85,25 +82,13 @@ export default function SolvePage() {
 
   const active = tabs.find((t) => t.key === activeKey) ?? tabs[0];
 
-  const loadHistory = useCallback(() => {
-    fetch("/api/artifacts?categoryId=all")
-      .then((r) => r.json())
-      .then((d) => setHistory((d.artifacts ?? []).filter((a: { type: string }) => a.type === "qa-map")));
-  }, []);
-
-  const loadSources = useCallback(() => {
-    fetch("/api/sources")
-      .then((r) => r.json())
-      .then((d) => {
-        setSources(d.sources ?? []);
-        setCategories(d.categories ?? []);
-      });
-  }, []);
-
-  useEffect(() => {
-    loadHistory();
-    loadSources();
-  }, [loadHistory, loadSources]);
+  /** 知识地图历史 = 产物里 type=qa-map（共享 hook 已拉全量产物，无需另拉） */
+  const history = useMemo(
+    () => lib.artifacts.filter((a) => a.type === "qa-map").map((a) => ({ id: a.id, title: a.title, created_at: a.created_at })),
+    [lib.artifacts]
+  );
+  /** 新地图/追问后刷新（连带资源列表一起刷，单点取数） */
+  const loadHistory = useCallback(() => { void lib.load(); }, [lib.load]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const patchActive = useCallback(
     (partial: Partial<MapTab>, markDirty = true) => {
@@ -344,43 +329,6 @@ export default function SolvePage() {
     setActiveKey(t.key);
   }
 
-  /** 导入资料：上传/链接/文本入库，成功后刷新资源列表 */
-  async function doUpload(files: File[], categoryId: number | null) {
-    for (const f of files) {
-      const fd = new FormData();
-      fd.append("file", f);
-      if (categoryId != null) fd.append("categoryId", String(categoryId));
-      fd.append("type", "其他");
-      const res = await fetch("/api/sources", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) setError(data.error ?? `《${f.name}》上传失败`);
-      else if (data.duplicate) setNotice(data.message);
-    }
-    loadSources();
-  }
-
-  async function doAddLink(url: string, categoryId: number | null) {
-    const res = await fetch("/api/sources", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, categoryId: categoryId ?? undefined }),
-    });
-    const data = await res.json();
-    if (data.error) setError(data.error);
-    else if (data.duplicate) setNotice(data.message);
-    loadSources();
-  }
-
-  async function doAddText(text: string, categoryId: number | null) {
-    const res = await fetch("/api/sources", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, categoryId: categoryId ?? undefined }),
-    });
-    const data = await res.json();
-    if (data.error) setError(data.error);
-    else if (data.duplicate) setNotice(data.message);
-    loadSources();
-  }
-
   /** 导入知识地图（导出的 JSON）：校验 → 存为产物 → 新标签打开续写 */
   async function importMap(f: File | undefined) {
     if (!f) return;
@@ -516,108 +464,95 @@ export default function SolvePage() {
     <div className="flex h-screen overflow-hidden bg-white">
       <Sidebar configured={null} />
 
-      {/* 左栏：地图管理 + 资源框 */}
-      <div className="flex w-[260px] shrink-0 flex-col border-r border-neutral-200">
+      {/* 左栏：共享资源栏（视图 = 仅 ready）；地图管理挂 topSlot */}
+      <div className="flex w-[260px] shrink-0 flex-col">
         <div className="border-b border-neutral-200 px-4 py-3">
           <div className="text-[15px] font-semibold tracking-tight">解题答疑</div>
           <div className="mt-0.5 text-[11px] text-neutral-400">问答成卡片 · 追问成地图 · 沉淀知识库</div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-3 py-3">
-          {error && (
-            <div className="mb-2 border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{error}</div>
-          )}
-          {notice && (
-            <div className="mb-2 border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-700">{notice}</div>
-          )}
-
-          {/* 地图管理区：限高自滚 */}
-          <div className="max-h-[40%] shrink-0 overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-              我的知识地图 <span className="num">{history.length}</span>
-            </span>
-            <div className="flex gap-1">
-              <button onClick={() => importRef.current?.click()} className="text-[11px] text-neutral-400 hover:text-neutral-900">导入</button>
-              <button onClick={addTab} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋ 新地图</button>
-            </div>
-            <input
-              ref={importRef}
-              type="file"
-              accept=".json,application/json"
-              hidden
-              onChange={(e) => void importMap(e.target.files?.[0])}
-            />
-          </div>
-          <div className="mt-1 space-y-0.5">
-            {history.length === 0 ? (
-              <p className="px-1 py-1 text-[11px] text-neutral-300">暂无，问第一个问题就会自动保存</p>
-            ) : (
-              history.map((h) => (
-                <button
-                  key={h.id}
-                  onClick={() => openHistory(h.id)}
-                  className={`block w-full truncate rounded px-2 py-1.5 text-left text-[11px] hover:bg-neutral-50 ${
-                    active?.mapId === h.id ? "bg-neutral-100 font-medium text-neutral-900" : "text-neutral-600"
-                  }`}
-                  title={h.title}
-                >
-                  🗺 {h.title}
-                </button>
-              ))
-            )}
-          </div>
-          </div>
-
-          {/* 资源框：勾选或拖进对话框作依据 */}
-          <div className="mt-4 flex min-h-0 flex-1 flex-col">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-                资源 <span className="num">{contextIds.size > 0 ? `依据 ${contextIds.size}` : "全部"}</span>
-              </span>
-              <div className="flex gap-1.5">
-                <button onClick={() => setUploadOpen(true)} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋导入</button>
-                <button onClick={() => setContextIds(new Set())} className="text-[11px] text-neutral-400 hover:text-neutral-900">
-                  清空
-                </button>
-              </div>
-            </div>
-            <div className="mt-1 min-h-0 flex-1 overflow-y-auto border border-neutral-100">
-              {ready.length === 0 ? (
-                <p className="px-2 py-2 text-[11px] text-neutral-300">暂无资料（可先去工作台上传）</p>
-              ) : (
-                ready.map((s) => (
-                  <div
-                    key={s.id}
-                    draggable
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData(DND_MIME, JSON.stringify({ kind: "source", ids: [s.id] }));
-                      e.dataTransfer.effectAllowed = "copy";
-                    }}
-                    className={`flex cursor-grab items-center gap-1.5 px-2 py-1 text-[11px] hover:bg-neutral-50 ${
-                      contextIds.has(s.id) ? "bg-neutral-100" : ""
-                    }`}
-                    title="拖进对话框作为依据，或点击勾选"
-                  >
+        {error && (
+          <div className="mx-3 mt-2 border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">{error}</div>
+        )}
+        {notice && (
+          <div className="mx-3 mt-2 border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-700">{notice}</div>
+        )}
+        <div className="min-h-0 flex-1">
+          <FilesPanel
+            sources={ready}
+            artifacts={[]}
+            categories={categories}
+            genError={null}
+            selected={contextIds}
+            selectedArts={new Set()}
+            onToggleSource={lib.toggleSelect}
+            onToggleArtifact={() => {}}
+            onToggleFolder={lib.toggleFolderSelect}
+            onToggleAll={lib.toggleSelectAll}
+            onUpload={lib.upload}
+            onAddLink={lib.addLink}
+            onAddText={lib.addText}
+            onDeleteSource={lib.removeSource}
+            onDeleteArtifact={async () => {}}
+            onDeleteCategory={lib.removeCategory}
+            onNewCategory={lib.newCategory}
+            onMoveSource={lib.moveSource}
+            onMoveArtifact={async () => {}}
+            onOpenSource={(s) => setPreviewSource(s)}
+            onOpenArtifact={() => {}}
+            sectionTitle={contextIds.size > 0 ? `资源 · 依据 ${contextIds.size}` : "资源"}
+            emptyText="暂无资料（可先去工作台上传）"
+            topBarExtra={
+              <button onClick={lib.clearSelection} className="text-[11px] text-neutral-400 hover:text-neutral-900">
+                清空
+              </button>
+            }
+            topSlot={
+              <div className="px-3 pt-2.5 pb-1">
+                {/* 地图管理区：限高自滚 */}
+                <div className="max-h-[180px] overflow-y-auto">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+                      我的知识地图 <span className="num">{history.length}</span>
+                    </span>
+                    <div className="flex gap-1">
+                      <button onClick={() => importRef.current?.click()} className="text-[11px] text-neutral-400 hover:text-neutral-900">导入</button>
+                      <button onClick={addTab} className="text-[11px] text-neutral-400 hover:text-neutral-900">＋ 新地图</button>
+                    </div>
                     <input
-                      type="checkbox"
-                      checked={contextIds.has(s.id)}
-                      onChange={() =>
-                        setContextIds((prev) => {
-                          const n = new Set(prev);
-                          if (n.has(s.id)) n.delete(s.id);
-                          else n.add(s.id);
-                          return n;
-                        })
-                      }
-                      className="accent-neutral-900"
+                      ref={importRef}
+                      type="file"
+                      accept=".json,application/json"
+                      hidden
+                      onChange={(e) => void importMap(e.target.files?.[0])}
                     />
-                    <span className="truncate text-neutral-700">{s.title}</span>
                   </div>
-                ))
-              )}
-            </div>
-            <p className="mt-1 text-[10px] text-neutral-400">拖到下方对话框 = 指定依据；不指定 = 自动检索全部</p>
-          </div>
+                  <div className="mt-1 space-y-0.5">
+                    {history.length === 0 ? (
+                      <p className="px-1 py-1 text-[11px] text-neutral-300">暂无，问第一个问题就会自动保存</p>
+                    ) : (
+                      history.map((h) => (
+                        <button
+                          key={h.id}
+                          onClick={() => openHistory(h.id)}
+                          className={`block w-full truncate rounded px-2 py-1.5 text-left text-[11px] hover:bg-neutral-50 ${
+                            active?.mapId === h.id ? "bg-neutral-100 font-medium text-neutral-900" : "text-neutral-600"
+                          }`}
+                          title={h.title}
+                        >
+                          🗺 {h.title}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            }
+            bottomSlot={
+              <p className="border-t border-neutral-200 px-3 py-2 text-[10px] text-neutral-400">
+                勾选或拖资源到下方对话框 = 指定依据；不指定 = 自动检索全部
+              </p>
+            }
+          />
         </div>
       </div>
 
@@ -776,7 +711,7 @@ export default function SolvePage() {
                   const p = readDnd(e.dataTransfer);
                   setDropOver(false);
                   if (p && p.kind === "source") {
-                    setContextIds((prev) => new Set([...prev, ...p.ids]));
+                    lib.addSelection(p.ids);
                   }
                 }}
               >
@@ -786,13 +721,7 @@ export default function SolvePage() {
                       <span key={id} className="flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700">
                         <span className="max-w-[120px] truncate">{sources.find((s) => s.id === id)?.title ?? id}</span>
                         <button
-                          onClick={() =>
-                            setContextIds((prev) => {
-                              const n = new Set(prev);
-                              n.delete(id);
-                              return n;
-                            })
-                          }
+                          onClick={() => lib.removeSelection(id)}
                           className="text-violet-400 hover:text-violet-700"
                         >
                           ×
@@ -862,16 +791,6 @@ export default function SolvePage() {
           {/* 右侧预览抽屉 */}
           <SourcePreviewDrawer source={previewSource} onClose={() => setPreviewSource(null)} />
 
-          {/* 导入资料弹窗 */}
-          <UploadModal
-            open={uploadOpen}
-            defaultCategoryId={null}
-            categories={categories}
-            onClose={() => setUploadOpen(false)}
-            onUpload={doUpload}
-            onAddLink={doAddLink}
-            onAddText={doAddText}
-          />
         </div>
       </main>
     </div>

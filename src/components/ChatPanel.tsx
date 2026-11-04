@@ -19,6 +19,7 @@ const TOOL_LABELS: Record<string, string> = {
   move_artifact: "移动产物",
   create_category: "新建类目",
   generate_summary: "生成复习笔记",
+  web_search: "联网搜索",
 };
 
 /** 同一工具的 start 后到 done/error 时原位替换，否则追加 */

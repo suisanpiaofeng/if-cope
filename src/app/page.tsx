@@ -1,26 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import FilesPanel, { type Artifact } from "@/components/FilesPanel";
 import PreviewPanel, { type PreviewTab, type SaveFileResult } from "@/components/PreviewPanel";
 import ChatPanel from "@/components/ChatPanel";
 import type { Source } from "@/lib/types";
+import { useLibrary } from "@/lib/useLibrary";
 import { filePreviewKind } from "@/lib/preview";
 
-type Category = { id: number; name: string; parent_id: number | null; pinned: number };
-
 export default function Workspace() {
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [sources, setSources] = useState<Source[]>([]);
-  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [tabs, setTabs] = useState<PreviewTab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
-  // 勾选的资源（对话上下文之一；发送后清空）
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  // 勾选的产物（AIGC/类目里的成果，与资源分开存防 id 撞车）
-  const [selectedArts, setSelectedArts] = useState<Set<number>>(new Set());
-  const [genError, setGenError] = useState<string | null>(null);
   const [generatingNote, setGeneratingNote] = useState<string | null>(null);
   const [organizing, setOrganizing] = useState(false);
   const [organizeMsg, setOrganizeMsg] = useState<string | null>(null);
@@ -28,6 +19,15 @@ export default function Workspace() {
   // 可拖动的分栏宽度
   const [filesW, setFilesW] = useState(264);
   const [chatW, setChatW] = useState(340);
+
+  // 共享资源库（第二栏数据/操作单点实现，翻译/解题页同源）；删资源时同步关预览标签
+  const lib = useLibrary({
+    onSourceRemoved: (id) => setTabs((t) => t.filter((x) => x.key !== `source-${id}`)),
+    onArtifactRemoved: (id) => setTabs((t) => t.filter((x) => x.key !== `artifact-${id}`)),
+  });
+  const { sources, artifacts, categories, selected, selectedArts } = lib;
+  const genError = lib.genError;
+  const setGenError = lib.setGenError;
 
   function startResize(e: React.PointerEvent, which: "files" | "chat") {
     e.preventDefault();
@@ -49,150 +49,12 @@ export default function Workspace() {
     window.addEventListener("pointerup", up);
   }
 
-  const load = useCallback(async () => {
-    const [srcRes, artRes] = await Promise.all([
-      fetch("/api/sources"),
-      fetch("/api/artifacts?categoryId=all"),
-    ]);
-    const data = await srcRes.json();
-    setSources(data.sources);
-    setCategories(data.categories);
-    setArtifacts((await artRes.json()).artifacts);
-  }, []);
+  const load = lib.load;
 
-  useEffect(() => { load(); }, [load]);
   useEffect(() => {
     fetch("/api/settings").then((r) => r.json())
       .then((d) => setConfigured(d.hasKey && Boolean(d.baseUrl && d.chatModel)));
   }, []);
-
-  // ---------- 勾选（对话/生成上下文） ----------
-  function toggleSelect(id: number) {
-    setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  }
-  function toggleSelectArtifact(id: number) {
-    setSelectedArts((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  }
-  function toggleFolderSelect(folderId: number | "ungrouped" | "aigc") {
-    const srcIds = folderId === "aigc" ? [] : sources
-      .filter((s) => (folderId === "ungrouped" ? s.category_id == null : s.category_id === folderId))
-      .map((s) => s.id);
-    const artIds = folderId === "ungrouped" ? [] : artifacts
-      .filter((a) => (folderId === "aigc" ? a.category_id == null : a.category_id === folderId))
-      .map((a) => a.id);
-    const flip = (prev: Set<number>, ids: number[]) => {
-      const n = new Set(prev);
-      const allOn = ids.length > 0 && ids.every((id) => n.has(id));
-      ids.forEach((id) => (allOn ? n.delete(id) : n.add(id)));
-      return n;
-    };
-    setSelected((prev) => flip(prev, srcIds));
-    setSelectedArts((prev) => flip(prev, artIds));
-  }
-  function toggleSelectAll() {
-    const allOn = selected.size === sources.length && selectedArts.size === artifacts.length;
-    setSelected(allOn ? new Set() : new Set(sources.map((s) => s.id)));
-    setSelectedArts(allOn ? new Set() : new Set(artifacts.map((a) => a.id)));
-  }
-
-  // ---------- 文件操作 ----------
-  async function upload(files: File[], categoryId: number | null, type: string) {
-    for (const f of files) {
-      const fd = new FormData();
-      fd.append("file", f);
-      if (categoryId != null) fd.append("categoryId", String(categoryId));
-      fd.append("type", type);
-      try {
-        const res = await fetch("/api/sources", { method: "POST", body: fd });
-        const data = await res.json();
-        if (!res.ok) setGenError(data.error ?? `《${f.name}》上传失败（HTTP ${res.status}）`);
-        else if (data.duplicate) setGenError(data.message);
-        else if (data.status === "failed") setGenError(`《${f.name}》解析失败：${data.note ?? "未知原因"}`);
-      } catch (err) {
-        setGenError(`《${f.name}》上传失败：${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    await load();
-  }
-
-  async function addLink(url: string, categoryId: number | null) {
-    try {
-      const res = await fetch("/api/sources", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, categoryId: categoryId ?? undefined }),
-      });
-      const data = await res.json();
-      if (data.error) setGenError(data.error);
-      else if (data.duplicate) setGenError(data.message);
-      else if (data.status === "failed") setGenError(`网页解析失败：${data.note ?? "未知原因"}`);
-    } catch (err) {
-      setGenError(`网页收藏失败：${err instanceof Error ? err.message : String(err)}`);
-    }
-    await load();
-  }
-
-  // 粘贴文本入库（上传弹窗「复制的文字」模式）
-  async function addText(text: string, categoryId: number | null) {
-    try {
-      const res = await fetch("/api/sources", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, categoryId: categoryId ?? undefined }),
-      });
-      const data = await res.json();
-      if (data.error) setGenError(data.error);
-      else if (data.duplicate) setGenError(data.message);
-      else if (data.status === "failed") setGenError(`文本解析失败：${data.note ?? "未知原因"}`);
-    } catch (err) {
-      setGenError(`文本添加失败：${err instanceof Error ? err.message : String(err)}`);
-    }
-    await load();
-  }
-
-  async function removeSource(id: number) {
-    await fetch(`/api/sources/${id}`, { method: "DELETE" });
-    setTabs((t) => t.filter((x) => x.key !== `source-${id}`));
-    await load();
-  }
-
-  async function removeArtifact(id: number) {
-    await fetch(`/api/artifacts/${id}`, { method: "DELETE" });
-    setTabs((t) => t.filter((x) => x.key !== `artifact-${id}`));
-    await load();
-  }
-
-  async function removeCategory(id: number) {
-    await fetch(`/api/categories/${id}`, { method: "DELETE" });
-    await load();
-  }
-
-  async function newCategory(name: string, parentId: number | null = null) {
-    await fetch("/api/categories", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, parentId }),
-    });
-    await load();
-  }
-
-  // ---------- 拖拽移动（资源 / 成果 换类目） ----------
-  async function moveSource(ids: number[], categoryId: number | null) {
-    for (const id of ids) {
-      await fetch(`/api/sources/${id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ categoryId }),
-      });
-    }
-    await load();
-  }
-
-  async function moveArtifact(ids: number[], categoryId: number | null) {
-    for (const id of ids) {
-      await fetch(`/api/artifacts/${id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ categoryId }),
-      });
-    }
-    await load();
-  }
 
   // ---------- 预览标签 ----------
   // 编辑保存：写回原始文件 + 重建索引，并同步更新标签里的文本
@@ -345,19 +207,19 @@ export default function Workspace() {
           genError={genError}
           selected={selected}
           selectedArts={selectedArts}
-          onToggleSource={toggleSelect}
-          onToggleArtifact={toggleSelectArtifact}
-          onToggleFolder={toggleFolderSelect}
-          onToggleAll={toggleSelectAll}
-          onUpload={upload}
-          onAddLink={addLink}
-          onAddText={addText}
-          onDeleteSource={removeSource}
-          onDeleteArtifact={removeArtifact}
-          onDeleteCategory={removeCategory}
-          onNewCategory={newCategory}
-          onMoveSource={moveSource}
-          onMoveArtifact={moveArtifact}
+          onToggleSource={lib.toggleSelect}
+          onToggleArtifact={lib.toggleSelectArtifact}
+          onToggleFolder={lib.toggleFolderSelect}
+          onToggleAll={lib.toggleSelectAll}
+          onUpload={lib.upload}
+          onAddLink={lib.addLink}
+          onAddText={lib.addText}
+          onDeleteSource={lib.removeSource}
+          onDeleteArtifact={lib.removeArtifact}
+          onDeleteCategory={lib.removeCategory}
+          onNewCategory={lib.newCategory}
+          onMoveSource={lib.moveSource}
+          onMoveArtifact={lib.moveArtifact}
           onOpenSource={openSource}
           onOpenArtifact={openArtifact}
         />
@@ -382,7 +244,7 @@ export default function Workspace() {
         <ChatPanel
           sources={sources}
           selected={selected}
-          onSelectionReset={() => { setSelected(new Set()); setSelectedArts(new Set()); }}
+          onSelectionReset={lib.clearSelection}
           onGenerateNote={handleGenerateNote}
           generatingNote={generatingNote}
           onOrganize={organizeResources}

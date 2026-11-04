@@ -1,5 +1,6 @@
 import db, { getAigcCategoryId } from "@/lib/db";
 import { generateSummary } from "@/lib/artifact";
+import { webSearch, webHitsToContext } from "@/lib/webSearch";
 
 /** Agent 工具：OpenAI function calling 格式。
  *  定义（TOOLS）给模型看；executeTool（执行器）在服务端真实操作数据库。
@@ -81,6 +82,20 @@ export const TOOLS = [
           source_ids: { type: "array", items: { type: "integer" }, description: "要基于哪些资料生成（资料 id 列表）" },
         },
         required: ["source_ids"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "联网搜索网页：时效性问题（新闻/最新进展/今日事件）、资料库未覆盖的知识、需要实时数据（汇率/日期/版本号）时使用。返回标题+链接+摘要",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "搜索关键词（提炼核心词，不要整句提问，20 字内效果最好）" },
+        },
+        required: ["query"],
       },
     },
   },
@@ -169,6 +184,13 @@ export async function executeTool(call: ToolCall): Promise<string> {
         )
         .run(getAigcCategoryId(), title, content, JSON.stringify(ids), model, Date.now());
       return `已生成复习笔记《${title}》并存入 AIGC（产物 #${info.lastInsertRowid}，基于 ${ids.length} 份资料）。内容：\n\n${content.slice(0, 6000)}`;
+    }
+
+    case "web_search": {
+      const q = String(call.args.query ?? "").trim();
+      if (!q) throw new Error("缺少 query");
+      const hits = await webSearch(q, 5);
+      return hits.length ? webHitsToContext(hits) : `联网搜索「${q}」无结果（可能断网/被拦/关键词太冷门），按已有知识回答并告知学生未能联网`;
     }
 
     default:

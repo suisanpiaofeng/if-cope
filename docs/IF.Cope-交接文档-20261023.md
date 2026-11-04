@@ -55,7 +55,9 @@ src/
   子类目 `parent_id` 一级嵌套（列表 `··` 缩进）；排序 AIGC>有子类目父类>名称。
 - 资源：排序按 `starred, pinned, is_primary, id`；删除级联 chunks/vectors/直存文件。
 - 对话：流式 + `[n]` 引用（检索到 chunk 自动附加、零无关引用）+ 快捷功能条 +
-  整理回执/用量提示（`提示:` 气泡）；webSearch 命中时把结果注成可读文本。
+  整理回执/用量提示（`提示:` 气泡）；**联网搜索 = agent 工具 `web_search`**（`lib/agent/tools.ts`，
+  模型自主决定调用，`lib/webSearch.ts` 免 Key 抓必应，失败静默降级；解题页 `/api/ask` 另有时效性
+  问题自动联网的旧逻辑，两条链路并存）。
 - 预览：PDF/EPUB/音视频/图片/PPTX/Markdown(便签画布)/代码（CodeMirror 可编辑）/URL。
 
 ### 3.2 快捷功能条（原"便签"模块改造）
@@ -173,17 +175,21 @@ embed_meta(key PK, value)  -- embed_dim 自愈（启动时对首条向量校验�
 
 **架构**（规格 `docs/课堂专区-架构规格-v2-20261028.md`）：本机反代（3778，随应用启动）内嵌看 CVS 回放 + 网页登录（零 Playwright，Cookie 浏览器托管）+ 逐课笔记/期末复习手册双层 + RAG 回流。
 
-**已实现**：M1 反代看课（`revProxy.ts` + `instrumentation.ts`）· 网页登录 + Cookie 兜底 · 课程/课时登记；M2 逐课笔记（`notes.ts`，字幕优先/手贴文本兜底 → LLM 四节 → RAG 回流 `rag.ts`）；M3 期末手册（`digest.ts`，主题重组+考点分层）+ Markdown 导出（带合规提示）。
+**已实现（2026-10-30 重构后）**：课堂页现为**纯内嵌浏览器**（整块 iframe → 反代 3778 → 官方平台）+ 登录态探测 + 重载/主页 + Cookie 兜底 + 合规声明拦截。旧的课程树/课时/笔记/期末手册功能（课程登记、同步、note/digest API、`classroom_*` 表、`store/notes/digest/rag/types/cvsApi` 模块、相关 smoke 脚本）已整体移除，等待重新构思；旧库中的 `classroom_*` 表保留不影响。反代（3778）本身不受影响，仍可内嵌官方页 + 网页登录。
 
 **真机联调清单**（校园网 + 已登录，逐条改常量）：
 1. **CAS 域与登录路径**：`src/lib/classroom/cookieRewrite.ts` 的 `CAS_HOSTS`/`CAS_LOGIN_PATH`——打开登录弹窗看实际跳转域名/路径改这里。
-2. **课时/字幕接口路径**：`src/lib/classroom/cvsApi.ts` 的 `API.lessons`/`API.subtitles`/`WHOAMI_PATH`——F12 看官方页真实请求改这里。
+2. **课时/字幕接口路径**：已随旧功能移除（原 `cvsApi.ts`）；重新构思功能时从 `ref/cvs-replay-notes-skill/references/principles.md` 找真实接口路径（`/subject_vod_list_new?teclIds=<id>` 等）。
 3. **官方页资源 404**：内嵌回放页若图片/脚本加载不出，是响应体里写死的绝对地址需在 `revProxy.ts` 的 `rewriteBody` 补替换规则。
-4. **整链验证**：登录 → 同步课时 → 点课时内嵌播放 → 生成笔记 → 生成期末手册 → 工作台对话引用课堂笔记。
+4. **整链验证（旧功能删除后）**：iframe 内嵌官网 → 页内登录 → 点课程在框内打开不弹新标签 → 重载保持当前页 → 主页按钮回首页。
 
 **运维要点**：3778 端口占用排查（`netstat -ano | grep 3778`）；Cookie 过期 = iframe 显示登录页 → 点「登录 CVS」重登；上游卡死有 15s 超时保护（不会永久转圈）。
 
-**已知行为**：FTS 为 trigram 分词，查询词需 ≥3 字符（2 字查询不命中是既有设计，非 bug）；字幕接口未联调时「同步课时」显示明确错误横幅（预期降级）。
+**iframe ↔ 宿主页通信**（`cookieRewrite.ts` 注入脚本）：反代给 HTML 注入 `<script data-ifcope-frame-nav>`，职责：① 收敛跳出（window.open/_blank → iframe 内跳转）；② 用 postMessage（source: `ifcope-frame`，目标 origin 3777）向宿主页上报 `nav`（当前 URL/标题，鉤 pushState+1s 轮询）与 `auth`（同源 fetch `/__whoami`，每 5s）。宿主页 `page.tsx` 用 nav 上报维护 navUrlRef，「重载」据此保持当前页（不回首页）。tecl 捕获与自动登记已随旧功能移除。排查：宿主页 F12 Console 看 `message` 事件是否到达（注意宿主页校验了 `e.origin === http://localhost:3778`，改反代端口要同步改注入脚本里的 `TOP` 常量）。
+
+**资源栏统一（2026-10-30）**：第二栏数据/操作单点在 `src/lib/useLibrary.ts`（取数、勾选、上传/链接/文本、删/建/移类目、拖拽移动），工作台/翻译/解题三页共用；`FilesPanel` 加视图 props（传入预过滤数据 + `topSlot/bottomSlot/topBarExtra` 插槽 + `sourceMeta/sourceBadge/sourceRowClass` 行级定制）。翻译页视图=仅 PDF（蓝色左界+🌐 高亮疑似英文），解题页视图=仅 ready（地图管理挂 topSlot，勾选集即问答依据）。改资源栏只动这两处，三页同时生效。
+
+**已知行为**：FTS 为 trigram 分词，查询词需 ≥3 字符（2 字查询不命中是既有设计，非 bug）。
 
 ### 9.2 其他待办
 
