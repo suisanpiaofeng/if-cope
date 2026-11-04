@@ -296,12 +296,15 @@ export default function SolvePage() {
   );
 
   // ── 地图标签 ──
+  const openingRef = useRef<Set<number>>(new Set()); // 正在拉取的地图（防连点重复开标签）
   function openHistory(id: number) {
     const existing = tabs.find((t) => t.mapId === id);
     if (existing) {
       setActiveKey(existing.key);
       return;
     }
+    if (openingRef.current.has(id)) return; // 首次点击还在拉取中：吞掉连点
+    openingRef.current.add(id);
     fetch(`/api/artifacts/${id}`)
       .then((r) => r.json())
       .then((d) => {
@@ -314,11 +317,17 @@ export default function SolvePage() {
             nodes: map.nodes ?? [],
             selectedId: null,
           };
-          setTabs((prev) => [...prev, t]);
+          setTabs((prev) => {
+            // 双保险：拉取期间若已被别的路径添加（如新追问自动建卡），不再重复
+            if (prev.some((x) => x.mapId === id)) return prev;
+            return [...prev, t];
+          });
           setActiveKey(t.key);
           setNotice(`已打开《${t.title}》`);
         } catch {
           setError("地图数据损坏");
+        } finally {
+          openingRef.current.delete(id);
         }
       });
   }

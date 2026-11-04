@@ -4,7 +4,7 @@ import { runPdf2zh } from "@/lib/pdfTranslate";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-/** PDF 保真翻译（pdf2zh）：同步等待产出（小文档约 1 分钟），POST { sourceId } */
+/** PDF 保真翻译（pdf2zh）：同步等待产出（小文档约 1 分钟），POST { sourceId } → { translatedSourceId, doc } */
 export async function POST(req: NextRequest) {
   const { sourceId } = (await req.json()) as { sourceId?: number };
   const id = Number(sourceId);
@@ -12,8 +12,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "缺少 sourceId" }, { status: 400 });
   }
   try {
-    const { artifactId, doc } = await runPdf2zh(id);
-    return NextResponse.json({ artifactId, doc });
+    const { translatedSourceId, doc } = await runPdf2zh(id);
+    return NextResponse.json({ translatedSourceId, doc });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

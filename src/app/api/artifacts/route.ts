@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import db, { getAigcCategoryId } from "@/lib/db";
+import db from "@/lib/db";
 import { generateNote } from "@/lib/notes";
 import { isNoteKind } from "@/lib/noteKinds";
 
@@ -23,8 +23,8 @@ export async function POST(req: NextRequest) {
     categoryId?: number | null; sourceIds: number[]; kind?: string; artifactIds?: number[];
     content?: string; title?: string;
   };
-  // 所有产物默认落 AIGC 固定类目，用户可再拖拽分类
-  const targetCategory = categoryId ?? getAigcCategoryId();
+  // 产物默认落「未归类」（null），用户可再拖拽分类
+  const targetCategory = categoryId ?? null;
   if (targetCategory != null) {
     const cat = db.prepare("SELECT id FROM categories WHERE id = ?").get(targetCategory);
     if (!cat) return NextResponse.json({ error: "类目不存在" }, { status: 400 });

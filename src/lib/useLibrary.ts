@@ -78,13 +78,11 @@ export function useLibrary(opts?: {
     setSelectedArts(new Set());
   }
   /** 类目勾选：文件夹内可见资源+产物全选/全不选（可见 = 过滤后） */
-  function toggleFolderSelect(folderId: number | "ungrouped" | "aigc") {
+  function toggleFolderSelect(folderId: number | "ungrouped") {
     const inFolder = <T extends { category_id: number | null }>(rows: T[]) =>
       rows.filter((r) => (folderId === "ungrouped" ? r.category_id == null : r.category_id === folderId));
-    const srcIds = folderId === "aigc" ? []
-      : inFolder(sources).filter((s) => srcFilterRef.current?.(s) ?? true).map((s) => s.id);
-    const artIds = folderId === "ungrouped" ? []
-      : inFolder(artifacts).filter((a) => artFilterRef.current?.(a) ?? true).map((a) => a.id);
+    const srcIds = inFolder(sources).filter((s) => srcFilterRef.current?.(s) ?? true).map((s) => s.id);
+    const artIds = inFolder(artifacts).filter((a) => artFilterRef.current?.(a) ?? true).map((a) => a.id);
     const flip = (prev: Set<number>, ids: number[]) => {
       const n = new Set(prev);
       const allOn = ids.length > 0 && ids.every((id) => n.has(id));

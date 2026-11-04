@@ -18,6 +18,8 @@ type TrTab = {
   key: string;
   artifactId: number | null;
   sourceId: number | null;
+  /** 新链路：译文已入库为资源（右栏直接预览/下载这一份） */
+  translatedSourceId?: number | null;
   title: string;
   status: "translating" | "done" | "error";
   progress: { done: number; total: number };
@@ -36,9 +38,10 @@ function looksEnglish(s: Source): boolean {
 }
 
 export default function TranslatePage() {
-  // 共享资源库：视图过滤 = 仅 PDF（本功能只做保真双语翻译）；勾选集即翻译选集
+  // 共享资源库：视图过滤 = 仅 PDF 且非译文（已是中文的译文不再进待翻列表）；勾选集即翻译选集
   const lib = useLibrary({
-    sourceFilter: (s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf",
+    sourceFilter: (s) =>
+      s.source_type === "file" && s.ext.toLowerCase() === "pdf" && s.type !== "翻译",
   });
   const { sources, categories, selected: picked } = lib;
   const [tabs, setTabs] = useState<TrTab[]>([]);
@@ -49,15 +52,20 @@ export default function TranslatePage() {
 
   const active = tabs.find((t) => t.key === activeKey) ?? null;
 
-  /** 翻译历史 = 产物里 type=translation（共享 hook 已拉全量产物，无需另拉） */
-  const history = useMemo(
-    () => lib.artifacts.filter((a) => a.type === "translation"),
-    [lib.artifacts]
-  );
+  /** 翻译历史：新链路 = type=翻译 的资源（唯一一份，不在 AIGC 重复）；兼容旧产物（type=translation） */
+  const history = useMemo(() => {
+    const fromSrc = lib.sources
+      .filter((s) => s.type === "翻译")
+      .map((s) => ({ kind: "source" as const, id: s.id, title: s.title, created_at: s.created_at }));
+    const fromArt = lib.artifacts
+      .filter((a) => a.type === "translation")
+      .map((a) => ({ kind: "artifact" as const, id: a.id, title: a.title, created_at: a.created_at }));
+    return [...fromSrc, ...fromArt].sort((a, b) => b.created_at - a.created_at);
+  }, [lib.sources, lib.artifacts]);
 
-  /** 可翻译：仅 PDF（文件可用性由服务端校验） */
+  /** 可翻译：仅 PDF 且非译文（文件可用性由服务端校验） */
   const translatable = useMemo(
-    () => sources.filter((s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf"),
+    () => sources.filter((s) => s.source_type === "file" && s.ext.toLowerCase() === "pdf" && s.type !== "翻译"),
     [sources]
   );
   const englishPicks = translatable.filter(looksEnglish);
@@ -75,15 +83,17 @@ export default function TranslatePage() {
       ]);
       setActiveKey(key);
       try {
-        // PDF → pdf2zh 保真翻译（保留原版排版，产出双语/译文两份 PDF）
+        // PDF → pdf2zh 保真翻译（译文入库为资源，可预览/检索/下载）
         const res = await fetch("/api/translatePdf", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sourceId: s.id }),
         });
-        const d = (await res.json()) as { error?: string; artifactId?: number; doc?: AnyTranslationDoc };
-        if (!res.ok || !d.doc || d.artifactId == null) throw new Error(d.error || `HTTP ${res.status}`);
-        patchTab(key, { status: "done", artifactId: d.artifactId, doc: d.doc });
+        const d = (await res.json()) as {
+          error?: string; translatedSourceId?: number; doc?: AnyTranslationDoc;
+        };
+        if (!res.ok || !d.doc || d.translatedSourceId == null) throw new Error(d.error || `HTTP ${res.status}`);
+        patchTab(key, { status: "done", translatedSourceId: d.translatedSourceId, doc: d.doc });
         void lib.load();
       } catch (e) {
         patchTab(key, { status: "error", error: e instanceof Error ? e.message : String(e) });
@@ -111,13 +121,25 @@ export default function TranslatePage() {
     }
   }
 
-  async function openHistory(id: number) {
-    const exist = tabs.find((t) => t.artifactId === id);
+  /** 打开历史：新链路（译文资源）→ 单 PDF 视图；旧产物 → 兼容原逻辑（PDF 对照/文本双栏） */
+  async function openHistory(item: { kind: "source" | "artifact"; id: number; title: string }) {
+    const exist = tabs.find(
+      (t) => (item.kind === "source" ? t.translatedSourceId === item.id : t.artifactId === item.id)
+    );
     if (exist) {
       setActiveKey(exist.key);
       return;
     }
-    const art = await fetch(`/api/artifacts/${id}`).then((r) => r.json());
+    if (item.kind === "source") {
+      const key = `t${Date.now().toString(36)}${tabSeq++}`;
+      setTabs((prev) => [
+        ...prev,
+        { key, artifactId: null, sourceId: null, translatedSourceId: item.id, title: item.title, status: "done", progress: { done: 0, total: 0 }, doc: null, pdfMode: true },
+      ]);
+      setActiveKey(key);
+      return;
+    }
+    const art = await fetch(`/api/artifacts/${item.id}`).then((r) => r.json());
     try {
       const doc = JSON.parse(art.content) as AnyTranslationDoc;
       const pdf = isPdfDoc(doc);
@@ -125,7 +147,7 @@ export default function TranslatePage() {
       const key = `t${Date.now().toString(36)}${tabSeq++}`;
       setTabs((prev) => [
         ...prev,
-        { key, artifactId: id, sourceId: doc.sourceId, title: doc.sourceTitle, status: "done", doc, pdfMode: pdf, progress: { done: segN, total: segN } },
+        { key, artifactId: item.id, sourceId: doc.sourceId, translatedSourceId: pdf ? doc.translatedSourceId ?? null : null, title: doc.sourceTitle, status: "done", doc, pdfMode: pdf, progress: { done: segN, total: segN } },
       ]);
       setActiveKey(key);
     } catch {
@@ -267,8 +289,8 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
                     ) : (
                       history.map((h) => (
                         <button
-                          key={h.id}
-                          onClick={() => void openHistory(h.id)}
+                          key={`${h.kind}${h.id}`}
+                          onClick={() => void openHistory(h)}
                           className="block w-full truncate px-2 py-1.5 text-left text-[11px] text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
                           title={h.title}
                         >
@@ -340,20 +362,22 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
                       <span className="num shrink-0 text-[10px] text-neutral-400">
                         PDF 保留排版 · {active.doc.model}
                       </span>
-                      {active.doc.monoPdf && (
+                      {active.translatedSourceId != null ? (
                         <a
-                          href={`/api/translations/${active.artifactId}?which=mono&download=1`}
-                          className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50"
+                          href={`/api/preview/${active.translatedSourceId}`}
+                          download
+                          className="shrink-0 border border-neutral-900 bg-neutral-900 px-2.5 py-1 text-xs text-white hover:bg-neutral-700"
                         >
                           下载译文 PDF
                         </a>
-                      )}
-                      <a
-                        href={`/api/translations/${active.artifactId}?which=dual&download=1`}
-                        className="shrink-0 border border-neutral-900 bg-neutral-900 px-2.5 py-1 text-xs text-white hover:bg-neutral-700"
-                      >
-                        下载双语 PDF
-                      </a>
+                      ) : active.doc.monoPdf ? (
+                        <a
+                          href={`/api/translations/${active.artifactId}?which=mono&download=1`}
+                          className="shrink-0 border border-neutral-900 bg-neutral-900 px-2.5 py-1 text-xs text-white hover:bg-neutral-700"
+                        >
+                          下载译文 PDF
+                        </a>
+                      ) : null}
                     </>
                   ) : (
                     <>
@@ -407,13 +431,25 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
               </div>
             )}
 
-            {/* 对照：PDF 保真版（双 PDF）/ 文本双栏 */}
+            {/* 对照：新链路单 PDF / PDF 保真版（双 PDF）/ 文本双栏 */}
             {active.doc && isPdfDoc(active.doc) ? (
               <PdfCompare
                 sourceId={active.sourceId ?? active.doc.sourceId}
                 artifactId={active.artifactId ?? 0}
-                mono={active.doc.monoPdf != null || active.doc.translatedSourceId != null}
+                translatedSourceId={active.doc.translatedSourceId ?? active.translatedSourceId ?? null}
               />
+            ) : active.translatedSourceId != null ? (
+              /* 历史里的译文资源：单栏全文阅读（原文件在资源栏可随时点开对照） */
+              <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
+                <div className="mb-2 flex items-center gap-3 text-[11px] text-neutral-500">
+                  <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />中文译文（已在资源目录，可与原文并排打开对照）</span>
+                </div>
+                <iframe
+                  src={`/api/preview/${active.translatedSourceId}`}
+                  title="译文 PDF"
+                  className="h-full min-h-0 w-full border border-neutral-300"
+                />
+              </div>
             ) : active.doc ? (
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <div className="mx-auto max-w-[1160px] px-4 py-4">
@@ -456,20 +492,25 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
 }
 
 /** PDF 对照：左原版 PDF、右纯译文 PDF（页数与原版一致，逐页对照阅读）；
- *    无译文版时回退双语版（原译交替，页数会多于原版） */
-function PdfCompare({ sourceId, artifactId, mono }: { sourceId: number; artifactId: number; mono: boolean }) {
+ *    新链路译文已入库为资源 → 右栏直接 /api/preview；旧产物回退 /api/translations */
+function PdfCompare({ sourceId, artifactId, translatedSourceId }: {
+  sourceId: number; artifactId: number; translatedSourceId: number | null;
+}) {
+  const right = translatedSourceId != null
+    ? `/api/preview/${translatedSourceId}`
+    : `/api/translations/${artifactId}?which=mono`;
   return (
     <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
       <div className="mb-2 flex items-center gap-3 text-[11px] text-neutral-500">
         <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-neutral-400" />原文（原版排版）</span>
-        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />{mono ? "中文译文（纯译文版，与左页逐页对照）" : "中文双语对照（原译交替）"}</span>
+        <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-blue-500" />中文译文（纯译文版，与左页逐页对照）</span>
         <span className="ml-auto text-neutral-400">两页均为完整 PDF，可各自滚动/缩放对照阅读</span>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
         {/* iframe 必须显式 h-full：UA 默认 height:150px 会阻断 grid 拉伸，
             极端扁视口会让 PDFium 算出分数缩放把文字栅格切碎（显示错乱的根因） */}
         <iframe src={`/api/preview/${sourceId}`} title="原文 PDF" className="h-full min-h-0 w-full border border-neutral-300" />
-        <iframe src={`/api/translations/${artifactId}?which=${mono ? "mono" : "dual"}`} title="译文 PDF" className="h-full min-h-0 w-full border border-neutral-300" />
+        <iframe src={right} title="译文 PDF" className="h-full min-h-0 w-full border border-neutral-300" />
       </div>
     </div>
   );

@@ -30,7 +30,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   return NextResponse.json({ ok: true });
 }
 
-/** 移动成果到类目：PATCH { categoryId: number | null }（null = AIGC） */
+/** 移动成果到类目：PATCH { categoryId: number | null }（null = 未归类） */
 export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await ctx.params;
   const id = Number(idStr);

@@ -11,7 +11,7 @@ export type Artifact = {
   id: number; category_id: number | null; type: string; title: string;
   content?: string; source_ids: number[]; model: string | null; created_at: number;
 };
-type FolderId = number | "ungrouped" | "aigc";
+type FolderId = number | "ungrouped";
 type Folder = { id: FolderId; name: string };
 
 // 不再提供类型下拉：按扩展名自动标注资源类型
@@ -81,7 +81,7 @@ function SubCatIcon() {
   );
 }
 
-/** 第二栏：类目树（AIGC + 普通类目 + 未归类），支持勾选、拖拽移动、上传。
+/** 第二栏：类目树（普通类目 + 未归类），支持勾选、拖拽移动、上传。
  *  各页视图差异通过 props 实现：传入预过滤的 sources/artifacts（翻译页只传 PDF、解题页只传 ready），
  *  特有区块用插槽挂载（topSlot=解题页地图管理，bottomSlot=翻译历史/批量按钮，topBarExtra=页内快捷钮）。 */
 export default function FilesPanel({
@@ -97,14 +97,14 @@ export default function FilesPanel({
 }: {
   sources: Source[];
   artifacts: Artifact[];
-  categories: { id: number; name: string; parent_id: number | null; pinned: number }[];
+  categories: { id: number; name: string; parent_id: number | null; pinned?: number }[];
   genError: string | null;
   selected: Set<number>;
-  /** 已勾选的产物（AIGC/类目里的成果） */
+  /** 已勾选的产物（生成的内容，默认在未归类） */
   selectedArts: Set<number>;
   onToggleSource: (id: number) => void;
   onToggleArtifact: (id: number) => void;
-  onToggleFolder: (folderId: number | "ungrouped" | "aigc") => void;
+  onToggleFolder: (folderId: number | "ungrouped") => void;
   onToggleAll: () => void;
   onUpload: (files: File[], categoryId: number | null, type: string) => Promise<void>;
   onAddLink: (url: string, categoryId: number | null) => Promise<void>;
@@ -178,21 +178,16 @@ export default function FilesPanel({
     return next;
   });
 
-  /** 类目树：AIGC（固定）置顶，其余按父子关系展开，未归类垫底；所有类目平权 */
-  const aigcCat = categories.find((c) => c.pinned === 1) ?? null;
-  const childrenOf = (pid: number) => categories.filter((c) => c.parent_id === pid && c.pinned !== 1);
-  const folders: (Folder & { depth: number; pinned?: boolean })[] = [];
-  if (aigcCat) {
-    folders.push({ id: aigcCat.id, name: "AIGC", depth: 0, pinned: true });
-    for (const c of childrenOf(aigcCat.id)) folders.push({ id: c.id, name: c.name, depth: 1 });
-  }
-  for (const c of categories.filter((x) => x.parent_id == null && x.pinned !== 1)) {
+  /** 类目树：按父子关系展开，未归类垫底（生成的内容默认落未归类，可拖入任意类目） */
+  const childrenOf = (pid: number) => categories.filter((c) => c.parent_id === pid);
+  const folders: (Folder & { depth: number })[] = [];
+  for (const c of categories.filter((x) => x.parent_id == null)) {
     folders.push({ id: c.id, name: c.name, depth: 0 });
     for (const ch of childrenOf(c.id)) folders.push({ id: ch.id, name: ch.name, depth: 1 });
   }
   folders.push({ id: "ungrouped", name: "未归类", depth: 0 });
 
-  /** 各文件夹内的资源 / 产物（AIGC 和未归类对两者一视同仁） */
+  /** 各文件夹内的资源 / 产物（未归类对两者一视同仁） */
   const folderSources = (id: FolderId): Source[] =>
     id === "ungrouped" ? sources.filter((s) => s.category_id == null)
     : sources.filter((s) => s.category_id === id);
@@ -255,7 +250,7 @@ export default function FilesPanel({
   }
 
   async function handleInternalDrop(payload: DndPayload, target: FolderId) {
-    // 所有类目平权：资源与产物都可放入任意类目（含 AIGC 与未归类）
+    // 所有类目平权：资源与产物都可放入任意类目（含未归类）
     const catId = target === "ungrouped" ? null : (target as number);
     if (payload.kind === "source") {
       await onMoveSource(payload.ids, catId);
@@ -332,7 +327,6 @@ export default function FilesPanel({
             const srcs = folderSources(f.id);
             const arts = folderArtifacts(f.id);
             const items = srcs.length + arts.length;
-            const isPinned = Boolean(f.pinned);
             // 类目选中态：资源（selected）+ 产物（selectedArts）合并计算
             const onCount =
               srcs.reduce((n, s) => n + (selected.has(s.id) ? 1 : 0), 0) +
@@ -355,16 +349,11 @@ export default function FilesPanel({
                     <svg className={`h-3 w-3 shrink-0 text-neutral-400 transition-transform ${isOpen ? "rotate-90" : ""}`} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
                       <path d="M4 2.5 8.5 6 4 9.5" />
                     </svg>
-                    {isPinned && (
-                      <svg className="h-3.5 w-3.5 shrink-0 text-violet-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-                        <path d="M8 1.5 9.4 5l3.6.3-2.7 2.4.8 3.5L8 9.4l-3.9 1.8.8-3.5L2.2 5.3 5.8 5 8 1.5Z" strokeLinejoin="round" />
-                      </svg>
-                    )}
-                    <span className={`truncate text-[13px] font-medium ${isPinned ? "text-violet-700" : "text-neutral-700"}`}>{f.name}</span>
+                    <span className="truncate text-[13px] font-medium text-neutral-700">{f.name}</span>
                     <span className="num text-[11px] text-neutral-400">{items}</span>
                   </button>
-                  {typeof f.id === "number" && !isPinned && (
-                    <button onClick={(e) => delCategory(e, f.id as number)} title="删除类目（资源回未归类、产物回 AIGC）"
+                  {typeof f.id === "number" && (
+                    <button onClick={(e) => delCategory(e, f.id as number)} title="删除类目（内容回未归类）"
                       className="hidden shrink-0 px-1 text-neutral-300 hover:text-red-600 group-hover:block"><TrashIcon /></button>
                   )}
                   {typeof f.id === "number" && (

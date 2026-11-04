@@ -113,8 +113,9 @@ if (!ftsExists) {
   db.exec("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')");
 }
 
-/* ── 类目平权 + 子类目：AIGC 变为真实固定类目（pinned），产物默认落 AIGC；
- * 「未归类」= category_id 为 NULL 的统称（资源和产物都可以在未归类） */
+/* ── 类目：父子层级（parent_id）。「AIGC 固定类目」已于 2026-11-04 移除：
+ *  生成的内容（笔记/地图等产物）默认落「未归类」（category_id NULL），可拖入任意类目；
+ *  pinned 列仅为旧库兼容保留，不再使用。 */
 const catCols = db.prepare("PRAGMA table_info(categories)").all() as { name: string }[];
 if (!catCols.some((c) => c.name === "parent_id")) {
   db.exec("ALTER TABLE categories ADD COLUMN parent_id INTEGER");
@@ -123,31 +124,23 @@ if (!catCols.some((c) => c.name === "pinned")) {
   db.exec("ALTER TABLE categories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
 }
 
-let aigcRow = db.prepare("SELECT id FROM categories WHERE pinned = 1 ORDER BY id LIMIT 1").get() as
-  | { id: number }
-  | undefined;
-if (!aigcRow) {
-  const byName = db.prepare("SELECT id FROM categories WHERE name = 'AIGC'").get() as { id: number } | undefined;
-  if (byName) {
-    db.prepare("UPDATE categories SET pinned = 1 WHERE id = ?").run(byName.id);
-    aigcRow = byName;
-  } else {
-    const info = db.prepare("INSERT INTO categories (name, pinned, created_at) VALUES ('AIGC', 1, ?)").run(Date.now());
-    aigcRow = { id: Number(info.lastInsertRowid) };
+// 一次性迁移：解散历史 AIGC 固定类目（产物/资源回未归类，子类目提为顶级，删除该行）
+const aigc = db
+  .prepare("SELECT id FROM categories WHERE pinned = 1 OR name = 'AIGC' ORDER BY pinned DESC, id LIMIT 1")
+  .get() as { id: number } | undefined;
+if (aigc) {
+  db.exec("BEGIN");
+  try {
+    db.prepare("UPDATE artifacts SET category_id = NULL WHERE category_id = ?").run(aigc.id);
+    db.prepare("UPDATE sources SET category_id = NULL WHERE category_id = ?").run(aigc.id);
+    db.prepare("UPDATE categories SET parent_id = NULL WHERE parent_id = ?").run(aigc.id);
+    db.prepare("DELETE FROM categories WHERE id = ?").run(aigc.id);
+    db.exec("COMMIT");
+    console.log(`[db] 已解散 AIGC 固定类目（#${aigc.id}）：内容回未归类`);
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
   }
-}
-// 历史产物（category_id 为 NULL）迁入 AIGC（仅当存在时，避免每次启动空跑 UPDATE）
-const nullArtifacts = db.prepare("SELECT COUNT(*) AS n FROM artifacts WHERE category_id IS NULL").get() as { n: number };
-if (nullArtifacts.n > 0) {
-  db.prepare("UPDATE artifacts SET category_id = ? WHERE category_id IS NULL").run(aigcRow.id);
-}
-
-/** AIGC 固定类目的 id（AI 产物默认落点） */
-export function getAigcCategoryId(): number | null {
-  const row = db.prepare("SELECT id FROM categories WHERE pinned = 1 ORDER BY id LIMIT 1").get() as
-    | { id: number }
-    | undefined;
-  return row?.id ?? null;
 }
 
 export type ModelSettings = {

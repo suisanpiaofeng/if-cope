@@ -4,7 +4,7 @@
  * 未指定父节点时由模型根据问题内容判断：挂到某张卡片（追问/相关延伸）还是新开话题。
  */
 import { NextRequest, NextResponse } from "next/server";
-import db, { getSettings, isModelConfigured, recordUsage, getAigcCategoryId } from "@/lib/db";
+import db, { getSettings, isModelConfigured, recordUsage } from "@/lib/db";
 import { retrieve, buildContextBlocks } from "@/lib/retrieval";
 import { estimateTokens } from "@/lib/embed";
 import { modelEndpoint, modelHeaders } from "@/lib/modelGateway";
@@ -201,7 +201,7 @@ export async function POST(req: NextRequest) {
         .prepare(
           "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, 'qa-map', ?, ?, ?, ?, ?)"
         )
-        .run(getAigcCategoryId(), title, JSON.stringify({ title, nodes: [node] } as QaMapData), "[]", model, Date.now());
+        .run(null, title, JSON.stringify({ title, nodes: [node] } as QaMapData), "[]", model, Date.now());
       savedMapId = Number(info.lastInsertRowid);
     }
 

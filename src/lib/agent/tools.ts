@@ -1,4 +1,4 @@
-import db, { getAigcCategoryId } from "@/lib/db";
+import db from "@/lib/db";
 import { generateSummary } from "@/lib/artifact";
 import { webSearch, webHitsToContext } from "@/lib/webSearch";
 
@@ -33,7 +33,7 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "move_source",
-      description: "把资料移动到指定类目（任意类目均可，含 AIGC）；null = 未归类",
+      description: "把资料移动到指定类目；null = 未归类",
       parameters: {
         type: "object",
         properties: {
@@ -48,7 +48,7 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "move_artifact",
-      description: "把产物（笔记等 AI 生成内容）移动到指定类目；产物默认生成在固定的 AIGC 类目；null = 未归类",
+      description: "把产物（笔记等 AI 生成内容）移动到指定类目；产物默认生成在未归类；null = 未归类",
       parameters: {
         type: "object",
         properties: {
@@ -75,7 +75,7 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "generate_summary",
-      description: "基于若干资料生成结构化中文复习笔记（markdown），产物自动存入 AIGC 类目",
+      description: "基于若干资料生成结构化中文复习笔记（markdown），产物存入未归类",
       parameters: {
         type: "object",
         properties: {
@@ -182,8 +182,8 @@ export async function executeTool(call: ToolCall): Promise<string> {
         .prepare(
           "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, 'summary', ?, ?, ?, ?, ?)"
         )
-        .run(getAigcCategoryId(), title, content, JSON.stringify(ids), model, Date.now());
-      return `已生成复习笔记《${title}》并存入 AIGC（产物 #${info.lastInsertRowid}，基于 ${ids.length} 份资料）。内容：\n\n${content.slice(0, 6000)}`;
+        .run(null, title, content, JSON.stringify(ids), model, Date.now());
+      return `已生成复习笔记《${title}》并存入未归类（产物 #${info.lastInsertRowid}，基于 ${ids.length} 份资料）。内容：\n\n${content.slice(0, 6000)}`;
     }
 
     case "web_search": {

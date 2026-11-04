@@ -187,7 +187,7 @@ export default function PreviewPanel({
             className="rounded-md bg-neutral-900 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-neutral-700 disabled:opacity-40">
             {downloading ? "下载中…" : "⤓ 下载 .md"}
           </button>
-          <span className="text-[11px] text-neutral-400">产物已存于 AIGC 类目，可拖拽到其他类目分类</span>
+          <span className="text-[11px] text-neutral-400">产物已存于未归类，可拖拽到其他类目分类</span>
           {saveMsgs[active.key] && !saveMsgs[active.key].ok && (
             <span className="text-[11px] text-red-600">{saveMsgs[active.key].text}</span>
           )}

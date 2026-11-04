@@ -12,7 +12,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { execFile } from "child_process";
-import db, { getAigcCategoryId } from "./db";
+import db from "./db";
 import { translateUpstream } from "./translate";
 import { saveFile, sha256 } from "./storage";
 import { ingestSource } from "./ingest";
@@ -36,10 +36,10 @@ export function resolveTranslatedPath(rel: string): string | null {
 }
 
 /**
- * 执行 pdf2zh 翻译一篇 PDF，产出译文 PDF 并：① 入库为资源（可预览/可检索/自动进资源目录）；
- * ② 落产物（type=translation, kind=pdf）供历史记录。双语对照版不再产出（减存储）。
+ * 执行 pdf2zh 翻译一篇 PDF，产出译文 PDF 并**入库为资源**（唯一一份：可预览/可检索/进资源目录）。
+ * 不再另造 AIGC 产物（避免同一份 PDF 出现两份）；历史记录由翻译页从 type=翻译 的资源推导。
  */
-export function runPdf2zh(sourceId: number): Promise<{ artifactId: number; doc: PdfTranslationDoc }> {
+export function runPdf2zh(sourceId: number): Promise<{ translatedSourceId: number; doc: PdfTranslationDoc }> {
   return new Promise((resolve, reject) => {
     const src = db
       .prepare("SELECT id, title, filename FROM sources WHERE id = ?")
@@ -91,10 +91,10 @@ export function runPdf2zh(sourceId: number): Promise<{ artifactId: number; doc: 
             // 译文 PDF 入库为资源：单份存储（移入 uploads），进原资源同类目，自动解析可检索
             const buffer = fs.readFileSync(monoPath);
             const hash = sha256(buffer);
-            let translatedSourceId: number | null = null;
+            let translatedSourceId: number;
             const dup = db.prepare("SELECT id FROM sources WHERE sha256 = ?").get(hash) as { id: number } | undefined;
             if (dup) {
-              translatedSourceId = dup.id; // 同译文已入库（重翻译同一文件）：复用，不重复占存储
+              translatedSourceId = dup.id; // 同译文已入库（重译同一文件）：复用，不重复占存储
             } else {
               const storageName = saveFile(buffer, "pdf");
               const cat = (
@@ -105,7 +105,7 @@ export function runPdf2zh(sourceId: number): Promise<{ artifactId: number; doc: 
               const info = db
                 .prepare(
                   `INSERT INTO sources (title, filename, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at)
-                   VALUES (?, ?, 'pdf', 'application/pdf', ?, ?, 'file', NULL, '笔记', ?, 'processing', ?)`
+                   VALUES (?, ?, 'pdf', 'application/pdf', ?, ?, 'file', NULL, '翻译', ?, 'processing', ?)`
                 )
                 .run(`《${src.title.slice(0, 40)}》译文`, storageName, buffer.length, hash, cat, Date.now());
               translatedSourceId = Number(info.lastInsertRowid);
@@ -120,20 +120,8 @@ export function runPdf2zh(sourceId: number): Promise<{ artifactId: number; doc: 
               engine: "pdf2zh",
               translatedAt: Date.now(),
             };
-            const info = db
-              .prepare(
-                "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, 'translation', ?, ?, ?, ?, ?)"
-              )
-              .run(
-                getAigcCategoryId(),
-                `《${src.title.slice(0, 30)}》译文`,
-                JSON.stringify(doc),
-                JSON.stringify([sourceId]),
-                up.model,
-                Date.now()
-              );
             fs.rmSync(outDir, { recursive: true, force: true }); // 临时目录清掉（含双语版，不留死重）
-            resolve({ artifactId: Number(info.lastInsertRowid), doc });
+            resolve({ translatedSourceId, doc });
           } catch (e) {
             reject(e instanceof Error ? e : new Error(String(e)));
           }
