@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from "react";
 import type { Source } from "@/lib/types";
 import UploadModal from "./UploadModal";
+import { Markdown } from "./Markdown";
 import { DND_MIME, readDnd, type DndPayload } from "@/lib/dnd";
 import { downloadArtifact } from "@/lib/download";
 
@@ -115,7 +116,8 @@ export default function FilesPanel({
   onMoveSource: (ids: number[], categoryId: number | null) => Promise<void>;
   onMoveArtifact: (ids: number[], categoryId: number | null) => Promise<void>;
   onOpenSource: (s: Source) => void;
-  onOpenArtifact: (a: Artifact) => void;
+  /** 点产物行：未传时用内置预览弹窗（翻译/解题页统一预览）；工作台传自己的标签页逻辑 */
+  onOpenArtifact?: (a: Artifact) => void;
   /** 区块标题（默认「资源」；翻译页传「待翻译资源」等） */
   sectionTitle?: string;
   /** 资源区上方插槽（解题页：知识地图管理） */
@@ -144,6 +146,30 @@ export default function FilesPanel({
   const [newName, setNewName] = useState("");
   const [newCatParent, setNewCatParent] = useState<number | null>(null);
   const [busyDownload, setBusyDownload] = useState<number | null>(null);
+  // 内置产物预览弹窗（onOpenArtifact 未传时的统一预览）
+  const [previewArt, setPreviewArt] = useState<Artifact | null>(null);
+  const [previewData, setPreviewData] = useState<{ content: string; model: string } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  async function openBuiltInPreview(a: Artifact) {
+    setPreviewArt(a);
+    setPreviewData(null);
+    setPreviewLoading(true);
+    try {
+      const r = await fetch(`/api/artifacts/${a.id}`);
+      const d = await r.json();
+      setPreviewData({ content: String(d.content ?? ""), model: String(d.model ?? "") });
+    } catch {
+      setPreviewData({ content: "（读取失败）", model: "" });
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function handleOpenArtifact(a: Artifact) {
+    if (onOpenArtifact) onOpenArtifact(a);
+    else void openBuiltInPreview(a);
+  }
 
   const notify = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 4000); };
   const toggle = (k: string) => setExpanded((prev) => {
@@ -389,7 +415,7 @@ export default function FilesPanel({
                       <div key={`a${a.id}`}
                         draggable
                         onDragStart={(e) => startDrag(e, { kind: "artifact", ids: [a.id] })}
-                        onClick={() => onOpenArtifact(a)}
+                        onClick={() => handleOpenArtifact(a)}
                         className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 hover:bg-neutral-50 ${
                           selectedArts.has(a.id) ? "bg-neutral-100" : ""
                         }`}>
@@ -472,9 +498,126 @@ export default function FilesPanel({
         </div>
       )}
 
+      {/* 内置产物预览弹窗（统一预览：笔记 Markdown / 译文 PDF / 知识地图 / 文本翻译对照） */}
+      {previewArt && (
+        <ArtifactPreviewModal
+          art={previewArt}
+          data={previewData}
+          loading={previewLoading}
+          onClose={() => { setPreviewArt(null); setPreviewData(null); }}
+        />
+      )}
+
       {toast && (
         <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-neutral-900 px-4 py-2.5 text-sm text-white shadow-lg">{toast}</div>
       )}
     </aside>
   );
 }
+
+/** 产物统一预览弹窗：所有页面共用的预览界面。
+ *  按产物内容自动选渲染器：笔记/摘要 → Markdown；PDF 译文 → iframe；
+ *  文本翻译 → 原译双栏；知识地图 → 卡片摘要列表；其他 → 原文文本。 */
+function ArtifactPreviewModal({ art, data, loading, onClose }: {
+  art: Artifact;
+  data: { content: string; model: string } | null;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  let body: ReactNode = null;
+  if (loading) {
+    body = <p className="py-10 text-center text-xs text-neutral-400">读取中…</p>;
+  } else if (data) {
+    try {
+      const parsed = JSON.parse(data.content) as Record<string, unknown>;
+      if (parsed.kind === "pdf") {
+        // PDF 译文：iframe 直读（译文已入库资源也可从资源行预览）
+        body = (
+          <iframe
+            src={`/api/translations/${art.id}?which=mono`}
+            title={art.title}
+            className="h-full min-h-0 w-full border-0"
+          />
+        );
+      } else if (Array.isArray(parsed.segments)) {
+        // 文本翻译：原译双栏
+        const segs = parsed.segments as Array<{ src?: string; trg?: string; page?: number | null; heading?: string | null }>;
+        body = (
+          <div className="h-full overflow-y-auto px-4 py-3">
+            {segs.map((s, i) => (
+              <div key={i} className="mb-2 grid grid-cols-2 gap-2 rounded-lg border border-neutral-100">
+                <div className="px-3 py-2 text-[11px] leading-5 whitespace-pre-wrap text-neutral-500">{s.src}</div>
+                <div className="border-l border-neutral-100 px-3 py-2 text-[11px] leading-5 whitespace-pre-wrap text-neutral-800">{s.trg}</div>
+              </div>
+            ))}
+          </div>
+        );
+      } else if (Array.isArray(parsed.nodes)) {
+        // 知识地图：卡片摘要
+        const nodes = parsed.nodes as Array<{ title?: string; question?: string; answer?: string }>;
+        body = (
+          <div className="h-full overflow-y-auto px-4 py-3">
+            <p className="mb-2 text-[11px] text-neutral-400">共 {nodes.length} 张卡片 · 完整地图请到「解题答疑」页打开</p>
+            {nodes.map((n, i) => (
+              <div key={i} className="mb-1.5 rounded-lg border border-neutral-100 px-3 py-2">
+                <div className="text-[12px] font-medium text-neutral-800">{n.title ?? `卡片 ${i + 1}`}</div>
+                {n.answer && <div className="mt-0.5 line-clamp-2 text-[11px] text-neutral-500">{n.answer}</div>}
+              </div>
+            ))}
+          </div>
+        );
+      } else {
+        body = <FallbackText text={data.content} />;
+      }
+    } catch {
+      // 非 JSON：按 Markdown 渲染（笔记/摘要等）
+      body = (
+        <div className="h-full overflow-y-auto px-4 py-3">
+          <FallbackText text={data.content} />
+        </div>
+      );
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6 py-8" onClick={onClose}>
+      <div
+        className="flex h-full w-full max-w-[860px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center justify-between border-b border-neutral-200 px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <svg className="h-3.5 w-3.5 shrink-0 text-violet-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+              <path d="M4 2h5l3 3v9H4V2Z" /><path d="M9 2v3h3" />
+            </svg>
+            <span className="truncate text-[14px] font-semibold">{art.title}</span>
+            <span className="num shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">
+              {ART_TYPE_LABEL[art.type] ?? art.type}
+              {data?.model && data.model !== "mock" ? ` · ${data.model}` : ""}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={() => void downloadArtifact(art.id, art.title)}
+              className="rounded-md border border-neutral-200 px-2.5 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50"
+            >
+              ⤓ 下载
+            </button>
+            <button onClick={onClose} className="px-1.5 text-neutral-400 hover:text-neutral-900">✕</button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1">{body}</div>
+      </div>
+    </div>
+  );
+}
+
+function FallbackText({ text }: { text: string }) {
+  return <Markdown text={text} />;
+}
+
+const ART_TYPE_LABEL: Record<string, string> = {
+  summary: "复习笔记",
+  translation: "翻译",
+  "qa-map": "知识地图",
+};

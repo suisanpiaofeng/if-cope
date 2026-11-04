@@ -221,7 +221,6 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
             onMoveSource={lib.moveSource}
             onMoveArtifact={async () => {}}
             onOpenSource={(s) => lib.toggleSelect(s.id)}
-            onOpenArtifact={() => {}}
             sectionTitle="待翻译资源"
             emptyText="暂无可翻译资源（先上传 PDF 并等待解析完成）"
             sourceMeta={(s) => `PDF · ${s.chunk_count > 0 ? `${s.chunk_count} 段 · ` : ""}${new Date(s.created_at).toLocaleDateString("zh-CN")}`}

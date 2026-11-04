@@ -498,7 +498,6 @@ export default function SolvePage() {
             onMoveSource={lib.moveSource}
             onMoveArtifact={async () => {}}
             onOpenSource={(s) => setPreviewSource(s)}
-            onOpenArtifact={() => {}}
             sectionTitle={contextIds.size > 0 ? `资源 · 依据 ${contextIds.size}` : "资源"}
             emptyText="暂无资料（可先去工作台上传）"
             topBarExtra={
