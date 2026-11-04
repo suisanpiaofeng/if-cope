@@ -33,10 +33,12 @@ export type PdfTranslationDoc = {
   kind: "pdf";
   sourceId: number;
   sourceTitle: string;
-  /** 双语对照版 PDF（相对 data/translations 的路径） */
-  dualPdf: string;
-  /** 纯译文版 PDF */
+  /** 旧产物：双语对照版 PDF（相对 data/translations 的路径；新版不再产出） */
+  dualPdf?: string;
+  /** 旧产物：纯译文版 PDF（相对 data/translations 的路径） */
   monoPdf?: string;
+  /** 新产物：译文 PDF 已入库为资源（可通过 /api/preview/<id> 预览/下载） */
+  translatedSourceId?: number;
   model: string;
   engine: "pdf2zh";
   translatedAt: number;

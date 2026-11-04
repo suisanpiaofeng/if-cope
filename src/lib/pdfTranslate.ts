@@ -14,6 +14,8 @@ import os from "os";
 import { execFile } from "child_process";
 import db, { getAigcCategoryId } from "./db";
 import { translateUpstream } from "./translate";
+import { saveFile, sha256 } from "./storage";
+import { ingestSource } from "./ingest";
 import type { PdfTranslationDoc } from "./types";
 
 const TRANSLATIONS_DIR = path.join(process.cwd(), "data", "translations");
@@ -34,8 +36,8 @@ export function resolveTranslatedPath(rel: string): string | null {
 }
 
 /**
- * 执行 pdf2zh 翻译一篇 PDF，产出双语/译文两份 PDF 并落产物（type=translation, kind=pdf）。
- * 返回 artifactId 供前端预览/下载。
+ * 执行 pdf2zh 翻译一篇 PDF，产出译文 PDF 并：① 入库为资源（可预览/可检索/自动进资源目录）；
+ * ② 落产物（type=translation, kind=pdf）供历史记录。双语对照版不再产出（减存储）。
  */
 export function runPdf2zh(sourceId: number): Promise<{ artifactId: number; doc: PdfTranslationDoc }> {
   return new Promise((resolve, reject) => {
@@ -74,40 +76,68 @@ export function runPdf2zh(sourceId: number): Promise<{ artifactId: number; doc: 
       { env, timeout: RUN_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 },
       (err, _stdout, stderr) => {
         const base = path.basename(original, ".pdf");
-        const dualPath = path.join(outDir, `${base}-dual.pdf`);
         const monoPath = path.join(outDir, `${base}-mono.pdf`);
-        if (!fs.existsSync(dualPath)) {
+        if (!fs.existsSync(monoPath)) {
           const msg = (err as NodeJS.ErrnoException | null)?.code === "ETIMEDOUT"
             ? `翻译超时（>${RUN_TIMEOUT_MS / 1000}s，文档过长可拆分后重试）`
             : err
               ? String((err as Error).message).slice(0, 240)
-              : "未产出双语 PDF";
+              : "未产出译文 PDF";
           const tail = stderr && typeof stderr === "string" ? `｜${stderr.slice(-240)}` : "";
           return reject(new Error(`${msg}${tail}`));
         }
-        const doc: PdfTranslationDoc = {
-          kind: "pdf",
-          sourceId,
-          sourceTitle: src.title,
-          dualPdf: path.relative(TRANSLATIONS_DIR, dualPath),
-          monoPdf: fs.existsSync(monoPath) ? path.relative(TRANSLATIONS_DIR, monoPath) : undefined,
-          model: up.model,
-          engine: "pdf2zh",
-          translatedAt: Date.now(),
-        };
-        const info = db
-          .prepare(
-            "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, 'translation', ?, ?, ?, ?, ?)"
-          )
-          .run(
-            getAigcCategoryId(),
-            `《${src.title.slice(0, 30)}》双语翻译`,
-            JSON.stringify(doc),
-            JSON.stringify([sourceId]),
-            up.model,
-            Date.now()
-          );
-        resolve({ artifactId: Number(info.lastInsertRowid), doc });
+        void (async () => {
+          try {
+            // 译文 PDF 入库为资源：单份存储（移入 uploads），进原资源同类目，自动解析可检索
+            const buffer = fs.readFileSync(monoPath);
+            const hash = sha256(buffer);
+            let translatedSourceId: number | null = null;
+            const dup = db.prepare("SELECT id FROM sources WHERE sha256 = ?").get(hash) as { id: number } | undefined;
+            if (dup) {
+              translatedSourceId = dup.id; // 同译文已入库（重翻译同一文件）：复用，不重复占存储
+            } else {
+              const storageName = saveFile(buffer, "pdf");
+              const cat = (
+                db.prepare("SELECT category_id FROM sources WHERE id = ?").get(sourceId) as
+                  | { category_id: number | null }
+                  | undefined
+              )?.category_id;
+              const info = db
+                .prepare(
+                  `INSERT INTO sources (title, filename, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at)
+                   VALUES (?, ?, 'pdf', 'application/pdf', ?, ?, 'file', NULL, '笔记', ?, 'processing', ?)`
+                )
+                .run(`《${src.title.slice(0, 40)}》译文`, storageName, buffer.length, hash, cat, Date.now());
+              translatedSourceId = Number(info.lastInsertRowid);
+              await ingestSource(translatedSourceId); // 同步解析+嵌入（译文可被对话检索）
+            }
+            const doc: PdfTranslationDoc = {
+              kind: "pdf",
+              sourceId,
+              sourceTitle: src.title,
+              translatedSourceId,
+              model: up.model,
+              engine: "pdf2zh",
+              translatedAt: Date.now(),
+            };
+            const info = db
+              .prepare(
+                "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, 'translation', ?, ?, ?, ?, ?)"
+              )
+              .run(
+                getAigcCategoryId(),
+                `《${src.title.slice(0, 30)}》译文`,
+                JSON.stringify(doc),
+                JSON.stringify([sourceId]),
+                up.model,
+                Date.now()
+              );
+            fs.rmSync(outDir, { recursive: true, force: true }); // 临时目录清掉（含双语版，不留死重）
+            resolve({ artifactId: Number(info.lastInsertRowid), doc });
+          } catch (e) {
+            reject(e instanceof Error ? e : new Error(String(e)));
+          }
+        })();
       }
     );
   });

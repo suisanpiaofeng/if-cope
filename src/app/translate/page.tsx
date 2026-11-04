@@ -323,7 +323,7 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
               <p className="mt-3 text-sm text-neutral-400">
                 在左侧勾选要翻译的资料（🌐 标记为疑似英文文献，可一键选中），
                 <br />
-                支持多份批量翻译，完成后在此以双文对照阅读，可下载 HTML / Markdown
+                支持 PDF 保真翻译，译文自动进入左侧资源目录（可预览/检索），完成后在此对照阅读，可下载译文 PDF
               </p>
             </div>
           </div>
@@ -413,7 +413,7 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
               <PdfCompare
                 sourceId={active.sourceId ?? active.doc.sourceId}
                 artifactId={active.artifactId ?? 0}
-                mono={active.doc.monoPdf != null}
+                mono={active.doc.monoPdf != null || active.doc.translatedSourceId != null}
               />
             ) : active.doc ? (
               <div className="min-h-0 flex-1 overflow-y-auto">
