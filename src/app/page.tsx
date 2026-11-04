@@ -245,6 +245,7 @@ export default function Workspace() {
           sources={sources}
           selected={selected}
           onSelectionReset={lib.clearSelection}
+          onToggleSource={lib.toggleSelect}
           onGenerateNote={handleGenerateNote}
           generatingNote={generatingNote}
           onOrganize={organizeResources}

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Source } from "@/lib/types";
 import { DND_MIME, readDnd } from "@/lib/dnd";
 import { NOTE_KINDS } from "@/lib/noteKinds";
+import { Markdown } from "./Markdown";
 
 type Thread = { id: number; title: string; created_at: number; message_count?: number };
-type Message = { role: "user" | "assistant"; content: string; citations?: Citation[] };
+type Message = { role: "user" | "assistant"; content: string; reasoning?: string; citations?: Citation[]; live?: boolean };
 type Citation = { n: number; sourceId: number; title: string; page: number | null; quote: string };
 type PanelView = "home" | "chat" | "all";
 
@@ -42,23 +43,26 @@ function timeAgo(ts: number) {
   return `${Math.round(d / 86400_000)} 天前`;
 }
 
-function mapMsgs(data: { messages?: { role: string; content: string; citations: string | null }[] }): Message[] {
+function mapMsgs(data: { messages?: { role: string; content: string; reasoning?: string | null; citations: string | null }[] }): Message[] {
   return (data.messages ?? []).map((m) => ({
     role: m.role as Message["role"],
     content: m.content,
+    reasoning: m.reasoning ?? undefined,
     citations: m.citations ? (JSON.parse(m.citations) as Citation[]) : undefined,
   }));
 }
 
 /** 最右对话栏：主界面（最近 3 条）↔ 对话视图 ↔ 全部对话；回答进行中回退不中断 */
 export default function ChatPanel({
-  sources, selected, onSelectionReset, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve,
+  sources, selected, onSelectionReset, onToggleSource, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve,
 }: {
   sources: Source[];
   /** 已勾选的资源（来自文件栏复选框） */
   selected: Set<number>;
   /** 发送后重置全部选中 */
   onSelectionReset: () => void;
+  /** 勾选/取消勾选一个资源（拖入对话框 = 同步勾选，左侧同步显示） */
+  onToggleSource?: (id: number) => void;
   /** 便签：基于当前上下文生成结构化产物（导图/流程图/闪卡…） */
   onGenerateNote?: (kind: string) => void;
   /** 正在生成的便签类型（null = 空闲） */
@@ -72,14 +76,11 @@ export default function ChatPanel({
   onOpenSolve?: () => void;
 }) {
   const ready = sources.filter((s) => s.status === "ready");
-  // 拖入对话框的文件（与勾选取并集作为上下文）
-  const [dropped, setDropped] = useState<Set<number>>(new Set());
+  // 拖入对话框的视觉反馈（拖入 = 同步勾选，左侧资源栏同步显示；无独立的 dropped 集合）
   const [dropOver, setDropOver] = useState(false);
-  // 实际参与检索的资源：勾选 ∪ 拖入；两者都空 → 全部资源
-  const hasFilter = selected.size > 0 || dropped.size > 0;
-  const context = hasFilter
-    ? ready.filter((s) => selected.has(s.id) || dropped.has(s.id))
-    : ready;
+  // 实际参与检索的资源：勾选集（拖入即进勾选）；空 → 全部资源
+  const hasFilter = selected.size > 0;
+  const context = hasFilter ? ready.filter((s) => selected.has(s.id)) : ready;
   const totalChunks = context.reduce((n, s) => n + s.chunk_count, 0);
   const [view, setView] = useState<PanelView>("home");
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -89,7 +90,7 @@ export default function ChatPanel({
   const [streaming, setStreaming] = useState(false);
   // 正在运行的任务：即使回到主界面/打开别的会话，流式仍在后台继续
   const [runThread, setRunThread] = useState<number | null>(null);
-  const [live, setLive] = useState<{ question: string; content: string; citations: Citation[]; tools: LiveTool[] } | null>(null);
+  const [live, setLive] = useState<{ question: string; content: string; reasoning: string; citations: Citation[]; tools: LiveTool[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [citation, setCitation] = useState<{ title: string; page: number | null; chunks: { page: number | null; text: string }[]; quote: string } | null>(null);
@@ -157,10 +158,9 @@ export default function ChatPanel({
     setView("chat");
     setStreaming(true);
     setRunThread(threadId); // 新对话时为 null，与 threadId 一致
-    setLive({ question, content: "", citations: [], tools: [] });
-    // 开启一段工作：全部选中状态回归初始（勾选清空、拖入清空）
+    setLive({ question, content: "", reasoning: "", citations: [], tools: [] });
+    // 开启一段工作：选中状态回归初始（拖入已并入勾选，一并清空）
     onSelectionReset();
-    setDropped(new Set());
     let tid = threadId;
     try {
       const res = await fetch("/api/chat", {
@@ -188,6 +188,7 @@ export default function ChatPanel({
           }
           if (evt.citations) setLive((l) => (l ? { ...l, citations: evt.citations } : l));
           if (evt.tool) setLive((l) => (l ? { ...l, tools: mergeTool(l.tools, evt.tool) } : l));
+          if (evt.reasoning) setLive((l) => (l ? { ...l, reasoning: l.reasoning + evt.reasoning } : l));
           if (evt.delta) setLive((l) => (l ? { ...l, content: l.content + evt.delta } : l));
           if (evt.error) setError(evt.error);
         }
@@ -206,28 +207,32 @@ export default function ChatPanel({
     }
   }
 
-  async function openCitation(c: Citation) {
-    const res = await fetch(`/api/lookup?sourceId=${c.sourceId}&page=${c.page}`);
-    const data = await res.json();
-    setCitation({ title: data.title, page: c.page, chunks: data.chunks, quote: c.quote });
-  }
+  // 引用跳转：useCallback 稳定引用（Markdown memo 性能）；从历史/实时引用里找编号对应项
+  const openCitation = useCallback((n: number) => {
+    const c =
+      messages.flatMap((m) => m.citations ?? []).find((x) => x.n === n) ??
+      live?.citations.find((x) => x.n === n);
+    if (!c) return;
+    void fetch(`/api/lookup?sourceId=${c.sourceId}&page=${c.page}`)
+      .then((r) => r.json())
+      .then((data) => setCitation({ title: data.title, page: c.page, chunks: data.chunks, quote: c.quote }))
+      .catch(() => {});
+  }, [messages, live]);
 
-  // 拖入对话框：文件成为本次上下文（与勾选取并集）
+  // 拖入对话框 = 同步勾选（左侧资源栏同步打勾，输入框上方胶囊可移除）
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDropOver(false);
     const payload = readDnd(e.dataTransfer);
-    if (payload?.kind === "source") {
-      setDropped((prev) => new Set([...prev, ...payload.ids]));
+    if (payload?.kind === "source" && onToggleSource) {
+      for (const id of payload.ids) {
+        if (!selected.has(id)) onToggleSource(id);
+      }
     }
   }
 
-  function removeDropped(id: number) {
-    setDropped((prev) => { const n = new Set(prev); n.delete(id); return n; });
-  }
-
-  const droppedList = sources.filter((s) => dropped.has(s.id));
-  const droppedChunks = droppedList.reduce((n, s) => n + s.chunk_count, 0);
+  // 对话框上方的上下文胶囊：勾选集（ready 才能参与检索）
+  const contextPills = ready.filter((s) => selected.has(s.id));
 
   // 渲染用消息：进行中的会话追加“用户提问 + 实时回答”覆盖层
   // （服务端在流开始前就存了用户消息，重进会话时已带它，这里按内容去重）
@@ -236,7 +241,7 @@ export default function ChatPanel({
     const last = messages[messages.length - 1];
     const hasUser = last && last.role === "user" && last.content === live.question;
     const base = hasUser ? messages : [...messages, { role: "user" as const, content: live.question }];
-    return [...base, { role: "assistant" as const, content: live.content, citations: live.citations }];
+    return [...base, { role: "assistant" as const, content: live.content, reasoning: live.reasoning, citations: live.citations, live: true }];
   })();
 
   const isRunning = (id: number) => streaming && runThread === id;
@@ -301,28 +306,25 @@ export default function ChatPanel({
         onDragLeave={() => setDropOver(false)}
         onDrop={handleDrop}
       >
-        {/* 拖入的文件：成为上下文的一部分 */}
-        {(droppedList.length > 0 || (hasFilter && dropped.size === 0 && selected.size > 0)) && (
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {droppedList.map((s) => (
-              <span key={s.id}
-                className="flex max-w-[160px] items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700">
-                <span className="truncate">{s.title}</span>
-                <button onClick={() => removeDropped(s.id)} className="shrink-0 text-violet-400 hover:text-violet-700" title="移出">×</button>
-              </span>
-            ))}
-            {droppedList.length > 0 && <span className="num self-center text-[10px] text-neutral-400">+{droppedChunks} 块</span>}
+        {/* 上下文胶囊：勾选/拖入的文件逐个显示（× 移除；空 = 全部资源）；右侧模型徽章 */}
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            {hasFilter ? (
+              <>
+                {contextPills.map((s) => (
+                  <span key={s.id}
+                    className="flex max-w-[160px] items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700">
+                    <span className="truncate" title={s.title}>{s.title}</span>
+                    <button onClick={() => onToggleSource?.(s.id)} className="shrink-0 text-violet-400 hover:text-violet-700" title="移出（同步取消左侧勾选）">×</button>
+                  </span>
+                ))}
+                <span className="num shrink-0 text-[10px] text-neutral-400">依据 {context.length} 份 · {totalChunks} 块</span>
+              </>
+            ) : (
+              <span className="text-[11px] text-neutral-400">未选资源 → 检索全部（拖文件进来 = 指定依据）</span>
+            )}
           </div>
-        )}
-        <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-neutral-400">
-          <span className="num shrink-0">
-            上下文 {context.length} 份 · {totalChunks} 块
-            {hasFilter && <span className="ml-1 text-violet-500">（已选）</span>}
-            {!hasFilter && <span className="ml-1">（全部资源）</span>}
-          </span>
-          <div className="flex min-w-0 items-center gap-1">
-            <span className="mono shrink-0 rounded border border-neutral-200 px-1.5 py-0.5">{model ?? "未配置"}</span>
-          </div>
+          <span className="mono shrink-0 rounded border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-400">{model ?? "未配置"}</span>
         </div>
         <div className="flex gap-2">
           <textarea
@@ -449,9 +451,28 @@ export default function ChatPanel({
                     ? "max-w-[85%] rounded-xl bg-neutral-900 px-3.5 py-2 text-sm text-white"
                     : "max-w-full text-sm leading-6"
                 }>
-                  {m.role === "assistant"
-                    ? renderAssistant(m.content, m.citations ?? [], openCitation)
-                    : m.content}
+                  {m.role === "assistant" ? (
+                    <>
+                      {(m.reasoning ?? "") !== "" && (
+                        <details open={m.live} className="group/re mb-1.5">
+                          <summary className="cursor-pointer select-none text-[11px] text-neutral-400 hover:text-neutral-600">
+                            {m.live ? "💭 思考中…" : "💭 思考过程"}（点击展开/收起）
+                          </summary>
+                          <div className="mt-1 max-h-52 overflow-y-auto rounded-lg border border-neutral-100 bg-neutral-50/60 px-3 py-2 text-[12px] leading-5 whitespace-pre-wrap text-neutral-500">
+                            {m.reasoning}
+                          </div>
+                        </details>
+                      )}
+                      <Markdown
+                        text={m.content}
+                        citations={m.citations?.map((c) => ({ n: c.n, title: c.title, page: c.page }))}
+                        onCitation={m.live ? undefined : openCitation}
+                        className="max-w-none text-sm leading-6 text-neutral-800"
+                      />
+                    </>
+                  ) : (
+                    m.content
+                  )}
                 </div>
                 {m.role === "assistant" && <CopyBtn text={m.content} />}
               </div>
@@ -536,28 +557,6 @@ function TrashIcon() {
       <path d="M6.8 6.8v4.4M9.2 6.8v4.4" strokeLinecap="round" />
     </svg>
   );
-}
-
-function renderAssistant(content: string, citations: Citation[], onOpen: (c: Citation) => void) {
-  const parts = content.split(/(\[\d+\])/g);
-  return parts.map((part, i) => {
-    const m = part.match(/^\[(\d+)\]$/);
-    if (m) {
-      const n = Number(m[1]);
-      const c = citations.find((x) => x.n === n);
-      if (c) {
-        return (
-          <button key={i} onClick={() => onOpen(c)}
-            title={`${c.title}${c.page != null ? ` 第 ${c.page} 页` : ""}`}
-            className="mx-0.5 inline-flex h-4.5 min-w-[18px] items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 px-1 align-super text-[10px] font-medium text-emerald-700 hover:bg-emerald-100">
-            {n}
-          </button>
-        );
-      }
-      return <sup key={i} className="text-xs text-neutral-400">[{n}]</sup>;
-    }
-    return <span key={i} className="whitespace-pre-wrap">{part}</span>;
-  });
 }
 
 

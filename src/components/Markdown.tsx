@@ -1,18 +1,35 @@
 "use client";
 
-/** 共享 Markdown 渲染器（预览区 / 知识地图卡片共用）：标题/列表/表格/引用/代码高亮 */
+/** 共享 Markdown 渲染器（预览区 / 知识地图卡片 / 对话回答共用）：标题/列表/表格/引用/代码高亮
+ *  支持行内引用编号 [n]（对话回答的可点来源徽标，其他场景忽略） */
 import React, { memo } from "react";
 
+export type MdCite = { n: number; title: string; page: number | null };
+
 /** memo：拖动/重渲染时卡片正文相同则跳过重新解析（性能关键路径） */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({
+  text,
+  citations,
+  onCitation,
+  className,
+}: {
+  text: string;
+  /** 可点引用：命中编号时渲染成徽标按钮 */
+  citations?: MdCite[];
+  onCitation?: (n: number) => void;
+  className?: string;
+}) {
+  const ctx = citations && onCitation ? { citations, onCitation } : undefined;
   return (
-    <div className="markdown mx-auto max-w-[760px] text-sm leading-7 text-neutral-700">
-      {renderBlocks(text)}
+    <div className={className ?? "markdown mx-auto max-w-[760px] text-sm leading-7 text-neutral-700"}>
+      {renderBlocks(text, ctx)}
     </div>
   );
 });
 
-function renderBlocks(src: string): React.ReactNode[] {
+type CiteCtx = { citations: MdCite[]; onCitation: (n: number) => void };
+
+function renderBlocks(src: string, ctx?: CiteCtx): React.ReactNode[] {
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
   const out: React.ReactNode[] = [];
   let i = 0;
@@ -45,7 +62,7 @@ function renderBlocks(src: string): React.ReactNode[] {
         "mb-1 mt-3 text-sm font-semibold text-neutral-800",
         "mb-1 mt-3 text-sm font-medium text-neutral-700",
       ][lvl - 1];
-      out.push(<div key={key++} className={cls}>{inline(h[2])}</div>);
+      out.push(<div key={key++} className={cls}>{inline(h[2], ctx)}</div>);
       i++;
       continue;
     }
@@ -63,7 +80,7 @@ function renderBlocks(src: string): React.ReactNode[] {
       while (i < lines.length && /^>\s?/.test(lines[i])) { buf.push(lines[i].replace(/^>\s?/, "")); i++; }
       out.push(
         <blockquote key={key++} className="my-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-amber-900">
-          {buf.map((l, j) => <div key={j}>{inline(l)}</div>)}
+          {buf.map((l, j) => <div key={j}>{inline(l, ctx)}</div>)}
         </blockquote>
       );
       continue;
@@ -81,11 +98,11 @@ function renderBlocks(src: string): React.ReactNode[] {
         <div key={key++} className="my-3 overflow-x-auto">
           <table className="w-full border-collapse text-xs">
             <thead>
-              <tr>{header.map((c, j) => <th key={j} className="border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-left font-medium text-neutral-800">{inline(c)}</th>)}</tr>
+              <tr>{header.map((c, j) => <th key={j} className="border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-left font-medium text-neutral-800">{inline(c, ctx)}</th>)}</tr>
             </thead>
             <tbody>
               {rows.map((r, ri) => (
-                <tr key={ri}>{r.map((c, j) => <td key={j} className="border border-neutral-200 px-2.5 py-1.5">{inline(c)}</td>)}</tr>
+                <tr key={ri}>{r.map((c, j) => <td key={j} className="border border-neutral-200 px-2.5 py-1.5">{inline(c, ctx)}</td>)}</tr>
               ))}
             </tbody>
           </table>
@@ -107,7 +124,7 @@ function renderBlocks(src: string): React.ReactNode[] {
           {items.map((it, j) => (
             <li key={j} className={`flex gap-2 ${it.depth ? "pl-5" : ""}`}>
               <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-neutral-400" />
-              <span>{inline(it.text)}</span>
+              <span>{inline(it.text, ctx)}</span>
             </li>
           ))}
         </ul>
@@ -124,7 +141,7 @@ function renderBlocks(src: string): React.ReactNode[] {
       }
       out.push(
         <ol key={key++} className="my-2 list-decimal space-y-1 pl-5 marker:text-neutral-400">
-          {items.map((t, j) => <li key={j}>{inline(t)}</li>)}
+          {items.map((t, j) => <li key={j}>{inline(t, ctx)}</li>)}
         </ol>
       );
       continue;
@@ -143,14 +160,14 @@ function renderBlocks(src: string): React.ReactNode[] {
     ) {
       buf.push(lines[i]); i++;
     }
-    out.push(<p key={key++} className="my-2">{inline(buf.join(" "))}</p>);
+    out.push(<p key={key++} className="my-2">{inline(buf.join(" "), ctx)}</p>);
   }
   return out;
 }
 
-/** 行内语法：`code` **bold** *italic* [text](url) ~~del~~ */
-function inline(text: string): React.ReactNode[] {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+?\*\*|\*[^*]+?\*|~~[^~]+?~~|\[[^\]]+\]\([^)]+\))/g);
+/** 行内语法：`code` **bold** *italic* [text](url) ~~del~~ + [n] 引用徽标（有 ctx 时） */
+function inline(text: string, ctx?: CiteCtx): React.ReactNode[] {
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+?\*\*|\*[^*]+?\*|~~[^~]+?~~|\[[^\]]+\]\([^)]+\)|\[\d+\])/g);
   return parts.map((p, i) => {
     if (/^`[^`]+`$/.test(p)) {
       return <code key={i} className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[12px] text-rose-700">{p.slice(1, -1)}</code>;
@@ -166,6 +183,22 @@ function inline(text: string): React.ReactNode[] {
           {link[1]}
         </a>
       );
+    }
+    // 引用编号 [n]：对话回答的可点来源徽标（其他场景无 ctx，退化为上标）
+    const cite = p.match(/^\[(\d+)\]$/);
+    if (cite) {
+      const n = Number(cite[1]);
+      const c = ctx?.citations.find((x) => x.n === n);
+      if (c && ctx) {
+        return (
+          <button key={i} onClick={() => ctx.onCitation(n)}
+            title={`${c.title}${c.page != null ? ` 第 ${c.page} 页` : ""}`}
+            className="mx-0.5 inline-flex h-4.5 min-w-[18px] items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 px-1 align-super text-[10px] font-medium text-emerald-700 hover:bg-emerald-100">
+            {n}
+          </button>
+        );
+      }
+      return <sup key={i} className="text-xs text-neutral-400">[{n}]</sup>;
     }
     return <span key={i}>{p}</span>;
   });

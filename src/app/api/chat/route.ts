@@ -81,8 +81,13 @@ export async function POST(req: NextRequest) {
           send({ tool: { name: "web_search", phase: "done", detail: `已联网检索 ${webHits.length} 条参考` } });
         }
         let full = "";
+        let reasoningFull = "";
         const finalBlocks = webHits.length ? [...contextBlocks, webHitsToContext(webHits)] : contextBlocks;
         for await (const part of streamChat(question.trim(), finalBlocks, history, sourceIds)) {
+          if (part.reasoning) {
+            reasoningFull += part.reasoning;
+            send({ reasoning: part.reasoning });
+          }
           if (part.tool) {
             send({ tool: part.tool });
           }
@@ -92,8 +97,8 @@ export async function POST(req: NextRequest) {
           }
         }
         db.prepare(
-          "INSERT INTO messages (thread_id, role, content, citations, created_at) VALUES (?, 'assistant', ?, ?, ?)"
-        ).run(tid, full, JSON.stringify(hits), Date.now());
+          "INSERT INTO messages (thread_id, role, content, reasoning, citations, created_at) VALUES (?, 'assistant', ?, ?, ?, ?)"
+        ).run(tid, full, reasoningFull || null, JSON.stringify(hits), Date.now());
         send({ done: true });
       } catch (err) {
         send({ error: err instanceof Error ? err.message : String(err) });

@@ -13,7 +13,7 @@ export type ToolEvent = {
   detail?: string;
 };
 
-export type ChatEvent = { delta?: string; tool?: ToolEvent };
+export type ChatEvent = { delta?: string; reasoning?: string; tool?: ToolEvent };
 
 /** 发给模型的消息（含 tool_calls / tool 角色） */
 type ApiMessage =
@@ -59,11 +59,11 @@ export async function* streamChat(
     // 手动迭代：转发增量给消费者的同时，截获工具调用与累计答案文本
     const it = streamOnce(s, messages, useTools)[Symbol.asyncIterator]();
     let step = await it.next();
-    let toolCalls: RawToolCall[] = [];
+    let toolCalls: RawToolCall[] = []
     let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
     while (!step.done) {
       if (step.value.delta) answerText += step.value.delta;
-      yield step.value;
+      yield step.value; // 含 delta / reasoning / tool，原样转发
       step = await it.next();
     }
     toolCalls = step.value.toolCalls;
@@ -101,12 +101,12 @@ export async function* streamChat(
   }
 }
 
-/** 单次模型调用：流式转发 content 增量；结束后返回累积的工具调用。 */
+/** 单次模型调用：流式转发 content/reasoning 增量；结束后返回累积的工具调用。 */
 async function* streamOnce(
   s: ReturnType<typeof getSettings>,
   messages: ApiMessage[],
   useTools: boolean
-): AsyncGenerator<{ delta?: string }, { toolCalls: RawToolCall[]; usage: { prompt_tokens?: number; completion_tokens?: number } | null }> {
+): AsyncGenerator<{ delta?: string; reasoning?: string }, { toolCalls: RawToolCall[]; usage: { prompt_tokens?: number; completion_tokens?: number } | null }> {
   const body: Record<string, unknown> = {
     model: s.chatModel,
     messages,
@@ -159,6 +159,9 @@ async function* streamOnce(
         }
         const delta = json.choices?.[0]?.delta;
         if (delta?.content) yield { delta: delta.content as string };
+        // 思考过程（深度思考模型）：deepseek-r1/glm/qwen 等的 OpenAI 兼容字段 reasoning_content（部分供应商用 reasoning）
+        const r = delta?.reasoning_content ?? delta?.reasoning;
+        if (typeof r === "string" && r) yield { reasoning: r };
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls as Array<{
             index: number; id?: string; function?: { name?: string; arguments?: string };
