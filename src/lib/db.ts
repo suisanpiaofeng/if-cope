@@ -94,6 +94,14 @@ for (const t of ["classroom_courses", "classroom_lessons", "classroom_notes", "c
   }
 }
 db.exec(`
+CREATE TABLE IF NOT EXISTS agent_todos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id INTEGER NOT NULL,
+  item_id INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS classroom_courses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
