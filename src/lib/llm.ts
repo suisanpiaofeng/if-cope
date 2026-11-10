@@ -7,6 +7,7 @@ import { runTool } from "./agent/executor";
 import { getTodos, type TodoItem } from "./agent/todo";
 import { listPrefs, buildUserSection } from "./agent/prefs";
 import { LoopGuard } from "./agent/loopGuards";
+import { foldHistory } from "./agent/context";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -55,7 +56,7 @@ export async function* streamChat(
   const context = contextBlocks.join("\n\n");
   const messages: ApiMessage[] = [
     { role: "system", content: buildSystemPrompt(sourceIds) },
-    ...history.slice(-8).map<ApiMessage>((m) => ({ role: m.role, content: m.content })),
+    ...foldHistory(history.slice(-20)).map<ApiMessage>((m) => ({ role: m.role, content: m.content })),
     {
       role: "user",
       content: context
