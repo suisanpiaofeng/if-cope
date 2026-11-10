@@ -21,7 +21,6 @@ import {
   rewriteSetCookie,
   rewriteLocation,
   rewriteBodyText,
-  injectFrameNavScript,
 } from "./cookieRewrite";
 
 /** /__whoami 探测用的官方接口（真机实测：未登录 401，登录后 200） */
@@ -69,9 +68,7 @@ function rewriteBody(body: Buffer, contentType: string, currentHost: string): Bu
     ct.includes("json") || // 登录后 token/跳转常在 JSON 里返回绝对地址
     ct.includes("x-www-form-urlencoded");
   if (!rewritable) return body;
-  let text = rewriteBodyText(body.toString("utf8"), currentHost);
-  // HTML 额外注入导航收敛脚本：官方页用 target="_blank"/window.open 开课程，iframe 里会弹新标签页
-  if (ct.includes("text/html")) text = injectFrameNavScript(text);
+  const text = rewriteBodyText(body.toString("utf8"), currentHost);
   return Buffer.from(text, "utf8");
 }
 
