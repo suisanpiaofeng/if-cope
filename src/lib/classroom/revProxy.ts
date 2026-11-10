@@ -6,7 +6,10 @@
  *  · 改写重定向 Location（CAS 跨域链映射回 /__cas 前缀；未知域名回错误页，不透传跳出）
  *  · 改写 HTML/JS 响应体里的官方绝对地址（官方页写死的 https://cvs.seu.edu.cn 等）
  *  · CORS：放行 3777 的前端 fetch（带凭据）
- * 合规：只监听 127.0.0.1；只转发不落盘任何媒体与凭据（规格 §7）。
+ * 合规：只监听 127.0.0.1；只转发不落盘任何媒体（规格 §7）。
+ * 会话 Cookie 仅存本机 settings 表（classroom.proxyCookie，与「Cookie 兑底」同键同库），
+ * 用途：①网页登录失败时的手动兑底 ②会话保活（2026-11-10：CVS 会话闲置过期后接口报 500/401，
+ * 自动定时续命后基本杜绝）。
  * 健壮性（v1 教训）：无 cookie 时 delete 头（禁止赋 undefined）；handler 全 try/catch，
  * 上游错误一律降级 502 提示，绝不 throw 打挂主进程。
  */
@@ -57,6 +60,63 @@ function manualCookie(): string {
   } catch {
     return "";
   }
+}
+
+/** 会话保活（2026-11-10）：登录 Set-Cookie 流经反代、或浏览器带 Cookie 过来时自动记住会话 Cookie，
+ *  startRevProxy 起 5 分钟定时器带它 ping 上游续命，闲置过期基本消失。 */
+const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+let lastPersisted = ""; // 写库去重：同一串 Cookie 不反复写盘
+
+function persistCookieString(cookie: string): void {
+  if (!cookie || cookie === lastPersisted) return;
+  lastPersisted = cookie;
+  try {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('classroom.proxyCookie', ?)").run(cookie);
+  } catch {
+    /* 保活记录失败不影响转发 */
+  }
+}
+
+/** Set-Cookie 列表 → 合并进会话 Cookie 串（同名覆盖；空值/Deleted 视为删除） */
+function mergeSetCookies(setCookieList: string[]): void {
+  const jar = new Map<string, string>();
+  for (const p of manualCookie().split(";")) {
+    const t = p.trim();
+    const i = t.indexOf("=");
+    if (i > 0) jar.set(t.slice(0, i), t.slice(i + 1));
+  }
+  for (const sc of setCookieList) {
+    const pair = sc.split(";")[0].trim();
+    const i = pair.indexOf("=");
+    if (i <= 0) continue;
+    const k = pair.slice(0, i);
+    const v = pair.slice(i + 1);
+    if (!v || v.toLowerCase() === "deleted") jar.delete(k);
+    else jar.set(k, v);
+  }
+  persistCookieString([...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; "));
+}
+
+/** 保活 ping：带存下的会话 Cookie 探登录态接口，使 CVS 服务端会话保持活跃。
+ *  无 Cookie/失败都只记日志，绝不影响主流程。 */
+function keepAlive(): void {
+  const cookie = manualCookie();
+  if (!cookie) return;
+  upstreamRequest(
+    {
+      host: CVS_HOST,
+      path: WHOAMI_PATH,
+      method: "GET",
+      headers: { host: CVS_HOST, referer: `https://${CVS_HOST}/`, accept: "application/json", cookie },
+    },
+    null
+  )
+    .then((up) => {
+      const ok = up.status >= 200 && up.status < 300 && !up.headers.location;
+      if (!ok) console.warn(`[cvs-proxy] 会话保活失败：HTTP ${up.status}（会话可能已过期，需重新登录）`);
+    })
+    .catch((e) => console.warn(`[cvs-proxy] 会话保活失败：${e instanceof Error ? e.message : String(e)}`));
 }
 
 /** 响应体改写：HTML/JS/JSON 里的校内绝对地址 → 反代地址（动态域，见 rewriteBodyText） */
@@ -123,6 +183,8 @@ function buildHeaders(req: http.IncomingMessage, host: string, path: string): ht
   headers.origin = `https://${host}`;
   const cookie = req.headers.cookie || manualCookie();
   if (cookie) headers.cookie = cookie; // v1 教训：无 cookie 时保持无头，禁止赋 undefined
+  // 浏览器带的会话 Cookie 也记下来供保活（覆盖重启前已登录的旧会话）
+  if (req.headers.cookie && host === CVS_HOST) persistCookieString(req.headers.cookie);
   return headers;
 }
 
@@ -139,6 +201,8 @@ async function forward(
     if (key === "set-cookie") {
       const list = Array.isArray(v) ? v : [String(v)];
       out["set-cookie"] = list.map(rewriteSetCookie);
+      // 登录链路上游发的新会话 Cookie → 记下来供保活（仅 CVS 域，CAS 登录票据不存）
+      if (!opts.isCas && (opts.host ?? CVS_HOST) === CVS_HOST) mergeSetCookies(list);
       continue;
     }
     out[key] = v;
@@ -157,6 +221,9 @@ async function forward(
     out.location = loc;
   }
   Object.assign(out, CORS);
+  // 响应体已在 upstreamRequest 整体缓冲，Transfer-Encoding 不可与 Content-Length 并存
+  // （非法 HTTP 响应，浏览器宽容但严格客户端直接拒收——2026-11-10 Node 撞墙实测）
+  delete out["transfer-encoding"];
   let body = up.body;
   if (body) {
     const ct = String(up.headers["content-type"] ?? "");
@@ -317,5 +384,10 @@ export function startRevProxy(): void {
   });
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`[cvs-proxy] 反代已启动：http://localhost:${PORT} → https://${CVS_HOST}`);
+    if (!keepAliveTimer) {
+      keepAliveTimer = setInterval(keepAlive, KEEPALIVE_INTERVAL_MS);
+      keepAliveTimer.unref?.(); // 不阻塞进程退出
+      console.log("[cvs-proxy] 会话保活已启用：每 5 分钟自动续命（有会话 Cookie 时）");
+    }
   });
 }

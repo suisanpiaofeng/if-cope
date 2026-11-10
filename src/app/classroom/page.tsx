@@ -7,7 +7,7 @@
  * 分工（§3）：需要官方会话的请求由本页经反代 3778 发起（Cookie 浏览器托管）；
  * 拿到结果提交 3777 落库；本地列表/课时从 3777 读缓存。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import DisclaimerGate, { DISCLAIMER_VERSION } from "@/components/classroom/DisclaimerGate";
 import {
@@ -21,6 +21,54 @@ import type { ClassroomCourse, ClassroomLesson, CvsCourseItem, CvsVodView } from
 
 type Playing = { lesson: ClassroomLesson; views: CvsVodView[]; viewIdx: number; viaProxy: boolean };
 
+/** 上游/反代 HTTP 错误（带状态码供错误分类） */
+class ProxyError extends Error {
+  status: number;
+  constructor(status: number) {
+    super(`反代请求失败 HTTP ${status}`);
+    this.status = status;
+  }
+}
+
+/** 错误分类（2026-11-10 真机教训：会话过期既可能 401 也可能 500（过期 Cookie 糊弄过网关后应用 NPE），
+ *  不能仅凭状态码断言原因——报错后需实测登录态再归类，见 refineError）：
+ *  401/403=登录过期；5xx=平台故障或会话过期；502/504/网络=连不通（反代 fail() 写死 502）。 */
+type ErrInfo = { kind: "auth" | "upstream" | "network" | "generic"; text: string };
+function classifyError(e: unknown): ErrInfo {
+  const msg = e instanceof Error ? e.message : String(e);
+  const status = e instanceof ProxyError ? e.status : undefined;
+  if (status === 401 || status === 403) {
+    return { kind: "auth", text: `登录已过期（HTTP ${status}）：请点「登录 CVS」刷新凭据后重试。` };
+  }
+  if (status !== undefined && status >= 500 && status !== 502 && status !== 504) {
+    return { kind: "upstream", text: `CVS 平台内部出错（HTTP ${status}），请稍后重试；若持续出现可尝试重新登录。` };
+  }
+  if (status === 502 || status === 504 || /超时|无法访问|fetch failed|ECONN|network/i.test(msg)) {
+    return { kind: "network", text: "无法连接 CVS：请确认校园网/VPN 连通后重试。" };
+  }
+  return { kind: "generic", text: msg };
+}
+
+/** 上游报错后实测登录态再归类（2026-11-10 真机教训：会话过期既可能 401 也可能 500，
+ *  且「登录 CVS」弹窗自述的“已登录”可能滞后于真实会话——以 __whoami 实测为准）。
+ *  auth/upstream 类错误才需复核；探测失败保持原分类。 */
+async function refineError(err: ErrInfo): Promise<ErrInfo> {
+  if (err.kind !== "auth" && err.kind !== "upstream") return err;
+  try {
+    const r = await fetch(`${CVS_PROXY_BASE}/__whoami`, { credentials: "include" });
+    const d = (await r.json()) as { loggedIn?: boolean };
+    if (!d.loggedIn) {
+      return {
+        kind: "auth",
+        text: "登录会话已过期：请点「登录 CVS」重新登录后再试。（过期会让官方接口报 500/401）",
+      };
+    }
+  } catch {
+    /* 探测失败保持原分类 */
+  }
+  return err;
+}
+
 /** 经反代调官方接口（credentials 带 localhost:3778 域 Cookie）。
  *  入参可为绝对 URL（如 CVS_API_BASE 拼出的）或反代相对路径，绝对时不再拼前缀。
  *  GET 失败自动重试一次（上游搜索接口 5-6s 响应且偶发断连，真机实测 2026-11-10）。 */
@@ -29,11 +77,11 @@ async function proxyFetch(pathOrUrl: string): Promise<unknown> {
   let r: Response;
   try {
     r = await fetch(url, { credentials: "include" });
-    if (!r.ok) throw new Error(`反代请求失败 HTTP ${r.status}`);
-  } catch (e) {
+    if (!r.ok) throw new ProxyError(r.status);
+  } catch {
     await new Promise((res) => setTimeout(res, 1000));
     r = await fetch(url, { credentials: "include" }); // 重试一次
-    if (!r.ok) throw new Error(`反代请求失败 HTTP ${r.status}`);
+    if (!r.ok) throw new ProxyError(r.status);
   }
   const ct = r.headers.get("content-type") ?? "";
   return ct.includes("application/json") ? r.json() : r.text();
@@ -59,8 +107,11 @@ export default function ClassroomPage() {
   const [lessons, setLessons] = useState<ClassroomLesson[]>([]);
   const [playing, setPlaying] = useState<Playing | null>(null);
   const [playError, setPlayError] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const resumeAtRef = useRef(0); // 换机位/代理兑底重挂载后恢复播放位置（2026-11-10 用户反馈：换机位从头播很痛苦）
+  const wasPausedRef = useRef(false); // 换机位时保持暂停态（暂停着看细节切机位不该突然开播）
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrInfo | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [cookieOpen, setCookieOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -125,8 +176,7 @@ export default function ClassroomPage() {
       await loadCourses();
       return null;
     } catch (e) {
-      const m = e instanceof Error ? e.message : String(e);
-      return `添加课程失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境；若持续失败可重新点「登录 CVS」刷新凭据。`;
+      return `添加课程失败：${(await refineError(classifyError(e))).text}`;
     }
   }
 
@@ -150,8 +200,8 @@ export default function ClassroomPage() {
       await loadCourses();
       setMsg({ kind: "ok", text: `已删除：${c.subj_name}` });
     } catch (e) {
-      const m = e instanceof Error ? e.message : String(e);
-      setError(`删除课程失败：${m}`);
+      const { kind, text } = classifyError(e);
+      setError({ kind, text: `删除课程失败：${text}` });
     } finally {
       setBusy(null);
       setDeleting(null);
@@ -218,8 +268,8 @@ export default function ClassroomPage() {
       setLessons(d2.lessons ?? []);
       setMsg({ kind: "ok", text: `课时已更新：${d.inserted} 讲` });
     } catch (e) {
-      const m = e instanceof Error ? e.message : String(e);
-      setError(`刷新课时失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境；若持续失败可重新点「登录 CVS」刷新凭据。`);
+      const { kind, text } = await refineError(classifyError(e));
+      setError({ kind, text: `刷新课时失败：${text}` });
     } finally {
       setBusy(null);
     }
@@ -234,11 +284,13 @@ export default function ClassroomPage() {
       const json = await proxyFetch(`${CVS_API_BASE}/course_vod_urls_new?courseId=${lesson.cour_id}`);
       const views = extractVodViews(json);
       if (views.length === 0) throw new Error("未取到可播放机位（转码中或结构变化）");
+      resumeAtRef.current = 0; // 新课时从头播
+      wasPausedRef.current = false;
       setPlaying({ lesson, views, viewIdx: 0, viaProxy: false });
       setPlayError(false);
     } catch (e) {
-      const m = e instanceof Error ? e.message : String(e);
-      setError(`打开播放失败：${m}。可稍后重试或刷新课时；若持续失败可重新点「登录 CVS」刷新凭据。`);
+      const { kind, text } = await refineError(classifyError(e));
+      setError({ kind, text: `打开播放失败：${text}` });
     } finally {
       setBusy(null);
     }
@@ -300,10 +352,36 @@ export default function ClassroomPage() {
 
         {/* 错误横幅（同步/播放失败显式呈现，不清缓存） */}
         {error && (
-          <div className="flex items-start justify-between gap-3 border-b border-red-200 bg-red-50 px-5 py-2 text-[12px] text-red-700">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="shrink-0 text-red-400 hover:text-red-600">
-              ✕
+          <div
+            className={`flex items-start justify-between gap-3 border-b px-5 py-2 text-[12px] ${
+              error.kind === "auth" ? "border-amber-200 bg-amber-50 text-amber-800" : "border-red-200 bg-red-50 text-red-700"
+            }`}>
+            <span>{error.text}</span>
+            <div className="flex shrink-0 items-center gap-2">
+              {error.kind === "auth" && (
+                <button
+                  onClick={() => window.open(CVS_PROXY_BASE + "/__login", "_blank")}
+                  className="rounded border border-amber-300 px-2 py-0.5 text-[11px] text-amber-700 hover:bg-amber-100">
+                  登录 CVS
+                </button>
+              )}
+              <button
+                onClick={() => setError(null)}
+                className={error.kind === "auth" ? "text-amber-400 hover:text-amber-600" : "text-red-400 hover:text-red-600"}>
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 登录态预警（2026-11-10 教训：会话过期后接口报 500/401 容易误判为平台故障，主动亮条免得用户乱试） */}
+        {loggedIn === false && (
+          <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-5 py-2 text-[12px] text-amber-800">
+            <span>CVS 未登录或会话已过期：搜索课程 / 刷新课时 / 播放都需要有效会话。</span>
+            <button
+              onClick={() => window.open(CVS_PROXY_BASE + "/__login", "_blank")}
+              className="shrink-0 rounded border border-amber-300 px-2 py-0.5 text-[11px] text-amber-700 hover:bg-amber-100">
+              登录 CVS
             </button>
           </div>
         )}
@@ -448,7 +526,14 @@ export default function ClassroomPage() {
                     {playing.views.map((v, i) => (
                       <button
                         key={`${v.viewNum}-${i}`}
-                        onClick={() => setPlaying({ ...playing, viewIdx: i, viaProxy: false, lesson: playing.lesson })}
+                        onClick={() => {
+                          // 记住当前进度/暂停态，换机位后接着看（否则重挂载回到片头）
+                          if (videoRef.current) {
+                            resumeAtRef.current = videoRef.current.currentTime;
+                            wasPausedRef.current = videoRef.current.paused;
+                          }
+                          setPlaying({ ...playing, viewIdx: i, viaProxy: false, lesson: playing.lesson });
+                        }}
                         className={`rounded border px-2 py-1 text-[11px] ${
                           i === playing.viewIdx
                             ? "border-neutral-900 bg-neutral-900 text-white"
@@ -476,10 +561,26 @@ export default function ClassroomPage() {
                     /* key 强制按课时/机位/通道切换重挂载；直链失败自动切反代代理兜底一次（规格 §3） */
                     <video
                       key={`${playing.lesson.id}:${playing.viewIdx}:${playing.viaProxy ? "p" : "d"}`}
+                      ref={videoRef}
                       src={playingSrc}
                       controls
                       autoPlay
                       className="h-full w-full"
+                      onTimeUpdate={() => {
+                        // 持续记进度：直链失败切代理兑底时也能续上
+                        if (videoRef.current) resumeAtRef.current = videoRef.current.currentTime;
+                      }}
+                      onLoadedMetadata={() => {
+                        // 重挂载（换机位/兑底/重试）后回到原位置；新课时 resumeAt=0 即从头播
+                        const v = videoRef.current;
+                        if (!v || resumeAtRef.current <= 0) return;
+                        const at =
+                          Number.isFinite(v.duration) && v.duration > 0
+                            ? Math.min(resumeAtRef.current, v.duration - 0.5)
+                            : resumeAtRef.current;
+                        v.currentTime = Math.max(0, at);
+                        if (wasPausedRef.current) v.pause();
+                      }}
                       onError={() => {
                         if (!playing.viaProxy) setPlaying({ ...playing, viaProxy: true });
                         else setPlayError(true);
@@ -557,12 +658,17 @@ function currentAcYearPrefix(): string {
   return `${start}${start + 1}`;
 }
 
+/** 当前学年判断：班号前缀 == 当前学年学期码（如 2026-11 → 20262027） */
+function isCurrentYear(it: CvsCourseItem): boolean {
+  return String(it.teclCode ?? "").startsWith(currentAcYearPrefix());
+}
+
 /** 搜索结果排序：当前学年排最前，其余按学期码降序（新学期在前） */
 function sortCurrentFirst(items: CvsCourseItem[]): CvsCourseItem[] {
-  const prefix = currentAcYearPrefix();
-  const rank = (it: CvsCourseItem) => (String(it.teclCode ?? "").startsWith(prefix) ? 0 : 1);
   return [...items].sort(
-    (a, b) => rank(a) - rank(b) || String(b.teclCode ?? "").localeCompare(String(a.teclCode ?? ""))
+    (a, b) =>
+      (isCurrentYear(a) ? 0 : 1) - (isCurrentYear(b) ? 0 : 1) ||
+      String(b.teclCode ?? "").localeCompare(String(a.teclCode ?? ""))
   );
 }
 
@@ -613,7 +719,10 @@ function SearchCourseDialog({
   const [loadingMore, setLoadingMore] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
 
-  /** 远程搜索（防抖 400ms；失败显式提示） */
+  /** 远程搜索（防抖 400ms；失败显式提示）。
+   *  上游固定按老课在前返回（排序参数无效，2026-11-10 四种写法实测均被忽略）——新学年课程
+   *  被挤到后面页。因此首页没有当前学年课程时自动补拉后续页（最多共 5 页）直到找到，
+   *  免去用户手动「加载更多」翻到底再翻回来的痛苦。 */
   useEffect(() => {
     const kw = q.trim();
     if (!kw) {
@@ -628,22 +737,36 @@ function SearchCourseDialog({
     setSearching(true);
     setErr(null);
     setSearchPage(1);
-    const t = setTimeout(() => {
+    const fetchPage = (page: number) =>
       proxyFetch(
-        `${CVS_API_BASE}/teachingclass/list?pageIndex=1&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
-      )
-        .then((json) => {
+        `${CVS_API_BASE}/teachingclass/list?pageIndex=${page}&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
+      );
+    const t = setTimeout(async () => {
+      try {
+        const json = await fetchPage(1);
+        if (stop) return;
+        const totalPage = Number((json as { data?: { totalPage?: number } }).data?.totalPage ?? 1);
+        let all = extractListItems(json) as CvsCourseItem[];
+        let page = 1;
+        setResults(sortCurrentFirst(all));
+        setSearchPage(page);
+        setHasMore(page < totalPage);
+        // 自动补拉：没有当前学年课程且还有后续页时，逐页拉到找到为止（上限 5 页防死循环）
+        while (!stop && page < totalPage && page < 5 && !all.some(isCurrentYear)) {
+          page += 1;
+          const more = extractListItems(await fetchPage(page)) as CvsCourseItem[];
           if (stop) return;
-          const items = sortCurrentFirst(extractListItems(json) as CvsCourseItem[]);
-          setResults(items);
-          setHasMore(items.length >= 100);
-        })
-        .catch((e) => {
-          if (!stop) setErr(e instanceof Error ? e.message : String(e));
-        })
-        .finally(() => {
-          if (!stop) setSearching(false);
-        });
+          const seen = new Set(all.map((it) => String(it.id ?? "")));
+          all = [...all, ...more.filter((it) => !seen.has(String(it.id ?? "")))];
+          setResults(sortCurrentFirst(all));
+          setSearchPage(page);
+          setHasMore(page < totalPage);
+        }
+      } catch (e) {
+        if (!stop) setErr(classifyError(e).text);
+      } finally {
+        if (!stop) setSearching(false);
+      }
     }, 400);
     return () => {
       stop = true;
@@ -661,15 +784,16 @@ function SearchCourseDialog({
       const json = await proxyFetch(
         `${CVS_API_BASE}/teachingclass/list?pageIndex=${page}&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
       );
+      const totalPage = Number((json as { data?: { totalPage?: number } }).data?.totalPage ?? 1);
       const items = extractListItems(json) as CvsCourseItem[];
       setResults((prev) => {
         const seen = new Set(prev.map((it) => String(it.id ?? "")));
         return sortCurrentFirst([...prev, ...items.filter((it) => !seen.has(String(it.id ?? "")))]);
       });
       setSearchPage(page);
-      setHasMore(items.length >= 100);
+      setHasMore(page < totalPage);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(classifyError(e).text);
     } finally {
       setLoadingMore(false);
     }
@@ -712,7 +836,9 @@ function SearchCourseDialog({
           {!q.trim() ? (
             <div className="py-10 text-center text-[12px] text-neutral-400">输入课程名开始搜索（官方接口约 2-6 秒）</div>
           ) : searching ? (
-            <div className="py-10 text-center text-[12px] text-neutral-400">搜索中…（官方接口约 2-6 秒）</div>
+            <div className="py-10 text-center text-[12px] text-neutral-400">
+              搜索中…（官方接口约 2-6 秒；正在定位当前学年课程，老课多时会自动多拉几页）
+            </div>
           ) : results.length > 0 ? (
             <div className="flex flex-col gap-2">
               {results.map((it) => {
@@ -754,7 +880,7 @@ function SearchCourseDialog({
                   onClick={loadMore}
                   disabled={addingId !== null || loadingMore}
                   className="rounded-lg border border-dashed border-neutral-300 py-2 text-[11.5px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
-                  {loadingMore ? "加载中…" : "加载更多（同名班跨多年份时首页可能被老班占满）"}
+                  {loadingMore ? "加载中…" : "加载更多"}
                 </button>
               )}
             </div>
