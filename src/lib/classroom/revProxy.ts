@@ -169,6 +169,11 @@ async function forward(
 
 async function proxyHandler(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const url = req.url ?? "/";
+  // 请求完成日志：method/url/状态/耗时（定位“卡在哪个请求”的运维能力，无副作用）
+  const t0 = Date.now();
+  res.on("finish", () => {
+    console.log(`[cvs-proxy] ${req.method} ${url.slice(0, 140)} → ${res.statusCode} (${Date.now() - t0}ms)`);
+  });
 
   // CORS 预检
   if (req.method === "OPTIONS") {

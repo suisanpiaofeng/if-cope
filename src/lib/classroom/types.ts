@@ -7,6 +7,9 @@
 /** 本机反代基址（随应用启动；登录态 Cookie 落在 localhost:3778 域） */
 export const CVS_PROXY_BASE = "http://localhost:3778";
 
+/** 官方 API 基址（反代 + 部署前缀 + v1；真机实测缺前缀会 404 且 Cookie Path 不匹配） */
+export const CVS_API_BASE = `${CVS_PROXY_BASE}/jy-application-resourcemanage/v1`;
+
 /** 官方机位编号 → 中文名（与官方 SPA 播放器一致，侦察 3415 chunk） */
 export const CVS_VIEW_NAMES: Record<number, string> = {
   1: "教师1",
@@ -43,16 +46,20 @@ export type ClassroomLesson = {
   duration_sec: number | null;
 };
 
-/** 官方 teachingclass/list 单条课程（前端经反代拉取后原样提交给 sync API） */
+/** 官方 teachingclass/list 单条教学班（前端经反代拉取后原样提交给 sync API）。
+ *  真机响应（2026-11-09）：id=教学班 id（无 teclId 字段）；subjName 可为 null（脏数据班次）；
+ *  师资在 teacherList[].userName（无 teacNames）；响应另含他人 studentList 等——只提交白名单字段，绝不透传他人信息。 */
 export type CvsCourseItem = {
-  teclId?: unknown;
+  id?: unknown;
   subjId?: unknown;
   subjName?: unknown;
   teclName?: unknown;
   teclCode?: unknown;
   acteName?: unknown;
-  teacNames?: unknown;
+  acyeBeginYear?: unknown;
+  acyeEndYear?: unknown;
   teclImgUrl?: unknown;
+  teacherList?: unknown;
   [k: string]: unknown;
 };
 

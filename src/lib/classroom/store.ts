@@ -10,14 +10,17 @@ function str(v: unknown): string {
   return v == null ? "" : String(v);
 }
 
-/** 批量落库课程（幂等：同 user_id+tecl_id 走 UPDATE，不重建 id） */
+/** 批量落库课程（幂等：同 user_id+tecl_id 走 UPDATE，不重建 id）。
+ *  校验与提取均为真机响应形态（2026-11-09）：id 必须；课程名 subjName 可空，用 teclName 兕底；
+ *  **白名单提取**——响应含他人 studentList/组织等，只取课程元数据落库，绝不写入他人信息。 */
 export function upsertCourses(items: CvsCourseItem[]): { inserted: number; updated: number } {
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error("官方课程数据结构变化：无可同步的课程数据");
   }
   for (const it of items) {
-    if (!it || !str(it.teclId) || !str(it.subjName)) {
-      throw new Error("官方课程数据结构变化：缺少 teclId/subjName");
+    if (!it || !str(it.id)) throw new Error("官方课程数据结构变化：缺少教学班 id");
+    if (!str(it.subjName) && !str(it.teclName)) {
+      throw new Error("官方课程数据结构变化：缺少 subjName/teclName");
     }
   }
   const now = Date.now();
@@ -40,19 +43,27 @@ export function upsertCourses(items: CvsCourseItem[]): { inserted: number; updat
   db.pragma("foreign_keys = ON");
   const run = db.transaction(() => {
     for (const it of items) {
-      const teclId = str(it.teclId);
-      const teacNames = Array.isArray(it.teacNames)
-        ? JSON.stringify(it.teacNames.map((n) => str(n)))
-        : "[]";
+      const teclId = str(it.id);
+      // 课程名：subjName 优先，null 时用 teclName（真机存在 subjName=null 的脏班次）
+      const subjName = str(it.subjName) || str(it.teclName);
+      const term =
+        str(it.acteName) ||
+        [str(it.acyeBeginYear), str(it.acyeEndYear)].filter(Boolean).join("-");
+      // 师资：teacherList[].userName（同 user 对象结构；提不出则空数组）
+      const teachers = Array.isArray(it.teacherList)
+        ? it.teacherList
+            .map((t) => str((t as { userName?: unknown } | null)?.userName))
+            .filter(Boolean)
+        : [];
       const exist = selectId.get(DEFAULT_USER, teclId) as { id: number } | undefined;
       if (exist) {
         update.run(
           str(it.subjId),
-          str(it.subjName),
+          subjName,
           str(it.teclName),
           str(it.teclCode),
-          str(it.acteName),
-          teacNames,
+          term,
+          JSON.stringify(teachers),
           str(it.teclImgUrl),
           null,
           now,
@@ -64,11 +75,11 @@ export function upsertCourses(items: CvsCourseItem[]): { inserted: number; updat
           DEFAULT_USER,
           teclId,
           str(it.subjId),
-          str(it.subjName),
+          subjName,
           str(it.teclName),
           str(it.teclCode),
-          str(it.acteName),
-          teacNames,
+          term,
+          JSON.stringify(teachers),
           str(it.teclImgUrl),
           null,
           now,

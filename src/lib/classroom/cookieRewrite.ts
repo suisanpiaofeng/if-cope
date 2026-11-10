@@ -22,13 +22,24 @@ export function prefixForHost(host: string): string | null {
   return null;
 }
 
-/** 逐属性拆分（保留顺序），重拼时去掉 Domain 与 Secure（让 Cookie 落 localhost） */
+/** 逐属性拆分（保留顺序），重拼时：去掉 Domain/Secure（让 Cookie 落 localhost）；
+ *  Path 统一改写为 /（官方会话 Cookie 原本 Path 限定在 /jy-application-resourcemanage 前缀下，
+ *  浏览器对反代自有路径 /__whoami 等不匹配就不携带——2026-11-09 真机实测：acknowledge 带前缀 200、/__whoami 401） */
 export function rewriteSetCookie(value: string): string {
   const parts = value.split(";").map((p) => p.trim()).filter(Boolean);
-  const kept = parts.filter((p) => {
+  const kept: string[] = [];
+  let hasPath = false;
+  for (const p of parts) {
     const name = p.split("=")[0].trim().toLowerCase();
-    return name !== "domain" && name !== "secure";
-  });
+    if (name === "domain" || name === "secure") continue;
+    if (name === "path") {
+      hasPath = true;
+      kept.push("Path=/");
+      continue;
+    }
+    kept.push(p);
+  }
+  if (!hasPath) kept.push("Path=/");
   return kept.join("; ");
 }
 

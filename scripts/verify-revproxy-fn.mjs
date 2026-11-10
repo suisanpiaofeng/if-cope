@@ -10,6 +10,14 @@ assert.equal(
 );
 // 无 Domain/Secure 时原样
 assert.equal(rewriteSetCookie("b=2; Path=/"), "b=2; Path=/");
+// Path 统一改写为 /（官方会话 Cookie 原 Path 限定在 /jy-application-resourcemanage 前缀下，
+// 浏览器对 /__whoami 等反代自有路径不匹配就不携带——2026-11-09 真机实测根因）
+assert.equal(
+  rewriteSetCookie("JSESSIONID=abc; Path=/jy-application-resourcemanage; HttpOnly"),
+  "JSESSIONID=abc; Path=/; HttpOnly"
+);
+// 无 Path 时补 Path=/（默认 Path 是请求目录，跨前缀会丢）
+assert.equal(rewriteSetCookie("route=xyz"), "route=xyz; Path=/");
 
 // Location：CAS 域 → /__cas 前缀
 assert.equal(

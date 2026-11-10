@@ -10,19 +10,30 @@ import { useCallback, useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import DisclaimerGate, { DISCLAIMER_VERSION } from "@/components/classroom/DisclaimerGate";
 import {
+  CVS_API_BASE,
   CVS_PROXY_BASE,
   CVS_VIEW_NAMES,
   extractListItems,
   extractVodViews,
 } from "@/lib/classroom/types";
-import type { ClassroomCourse, ClassroomLesson, CvsVodView } from "@/lib/classroom/types";
+import type { ClassroomCourse, ClassroomLesson, CvsCourseItem, CvsVodView } from "@/lib/classroom/types";
 
 type Playing = { lesson: ClassroomLesson; views: CvsVodView[]; viewIdx: number; viaProxy: boolean };
 
-/** 经反代调官方接口（credentials 带 localhost:3778 域 Cookie） */
-async function proxyFetch(path: string): Promise<unknown> {
-  const r = await fetch(CVS_PROXY_BASE + path, { credentials: "include" });
-  if (!r.ok) throw new Error(`反代请求失败 HTTP ${r.status}`);
+/** 经反代调官方接口（credentials 带 localhost:3778 域 Cookie）。
+ *  入参可为绝对 URL（如 CVS_API_BASE 拼出的）或反代相对路径，绝对时不再拼前缀。
+ *  GET 失败自动重试一次（上游搜索接口 5-6s 响应且偶发断连，真机实测 2026-11-10）。 */
+async function proxyFetch(pathOrUrl: string): Promise<unknown> {
+  const url = pathOrUrl.startsWith("http") ? pathOrUrl : CVS_PROXY_BASE + pathOrUrl;
+  let r: Response;
+  try {
+    r = await fetch(url, { credentials: "include" });
+    if (!r.ok) throw new Error(`反代请求失败 HTTP ${r.status}`);
+  } catch (e) {
+    await new Promise((res) => setTimeout(res, 1000));
+    r = await fetch(url, { credentials: "include" }); // 重试一次
+    if (!r.ok) throw new Error(`反代请求失败 HTTP ${r.status}`);
+  }
   const ct = r.headers.get("content-type") ?? "";
   return ct.includes("application/json") ? r.json() : r.text();
 }
@@ -38,7 +49,12 @@ export default function ClassroomPage() {
   const [proxyRunning, setProxyRunning] = useState<boolean | null>(null);
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
   const [courses, setCourses] = useState<ClassroomCourse[]>([]);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(""); // 远程搜索词（空=显示已添加课程）
+  const [searchResults, setSearchResults] = useState<CvsCourseItem[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchErr, setSearchErr] = useState<string | null>(null);
+  const [searchPage, setSearchPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const [activeCourse, setActiveCourse] = useState<ClassroomCourse | null>(null);
   const [lessons, setLessons] = useState<ClassroomLesson[]>([]);
   const [playing, setPlaying] = useState<Playing | null>(null);
@@ -93,34 +109,87 @@ export default function ClassroomPage() {
     if (agreed) loadCourses();
   }, [agreed, loadCourses]);
 
-  /** 同步课程：经反代分页拉 teachingclass/list → 提交 3777 落库 → 刷新本地（失败不清缓存） */
-  async function syncCourses() {
-    setBusy("同步课程");
+  /** 远程搜索：官方「我的课程」页同一接口+condition（全校课程，搜到自己那门点 + 添加）。
+   *  防抖 400ms；失败显式提示，不清已添加列表。 */
+  useEffect(() => {
+    const kw = q.trim();
+    if (!kw) {
+      setSearchResults([]);
+      setSearchErr(null);
+      setSearching(false);
+      setSearchPage(1);
+      setHasMore(false);
+      return;
+    }
+    let stop = false;
+    setSearching(true);
+    setSearchErr(null);
+    setSearchPage(1);
+    const t = setTimeout(() => {
+      proxyFetch(
+        `${CVS_API_BASE}/teachingclass/list?pageIndex=1&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
+      )
+        .then((json) => {
+          if (stop) return;
+          const items = sortNewest(extractListItems(json) as CvsCourseItem[]);
+          setSearchResults(items);
+          setHasMore(items.length >= 100);
+        })
+        .catch((e) => {
+          if (!stop) setSearchErr(e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => {
+          if (!stop) setSearching(false);
+        });
+    }, 400);
+    return () => {
+      stop = true;
+      clearTimeout(t);
+    };
+  }, [q]);
+
+  /** 加载更多：搜索翻页追加（同名班跨多年份时首页可能被老班挤满） */
+  async function loadMoreSearch() {
+    const kw = q.trim();
+    const page = searchPage + 1;
+    setBusy("加载更多");
+    setSearchErr(null);
+    try {
+      const json = await proxyFetch(
+        `${CVS_API_BASE}/teachingclass/list?pageIndex=${page}&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
+      );
+      const items = extractListItems(json) as CvsCourseItem[];
+      setSearchResults((prev) => {
+        const seen = new Set(prev.map((it) => String(it.id ?? "")));
+        return sortNewest([...prev, ...items.filter((it) => !seen.has(String(it.id ?? "")))]);
+      });
+      setSearchPage(page);
+      setHasMore(items.length >= 100);
+    } catch (e) {
+      setSearchErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** 单门添加：搜索结果一条 → 提交 3777 落库（白名单字段在 store 层）→ 进已添加列表 */
+  async function addCourse(item: CvsCourseItem) {
+    setBusy("添加课程");
     setError(null);
     setMsg(null);
     try {
-      const all: unknown[] = [];
-      for (let page = 1; page <= 10; page++) {
-        const json = await proxyFetch(
-          `/v1/teachingclass/list?page.pageIndex=${page}&page.pageSize=200`
-        );
-        const items = extractListItems(json);
-        all.push(...items);
-        if (items.length < 200) break;
-      }
-      if (all.length === 0) throw new Error("官方未返回任何课程（结构变化或账号无课程）");
       const r = await fetch("/api/classroom/courses/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: all }),
+        body: JSON.stringify({ items: [item] }),
       });
       const d = await r.json();
       if (!r.ok || d.error) throw new Error(d.error ?? `落库失败 HTTP ${r.status}`);
       await loadCourses();
-      setMsg({ kind: "ok", text: `课程已同步：新增 ${d.inserted}、更新 ${d.updated}` });
+      setMsg({ kind: "ok", text: `已添加：${String(item.subjName || item.teclName || "")}` });
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
-      setError(`同步失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境（已缓存的课程不受影响）。`);
+      setError(`添加课程失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境；若持续失败可重新点「登录 CVS」刷新凭据。`);
     } finally {
       setBusy(null);
     }
@@ -156,9 +225,26 @@ export default function ClassroomPage() {
         "page.orders[0].field": "courBeginTime",
         schoolOpenStatusFlag: "false",
       });
-      const json = await proxyFetch(`/v1/subject_vod_list_new?${qs}`);
+      const json = await proxyFetch(`${CVS_API_BASE}/subject_vod_list_new?${qs}`);
       const items = extractListItems(json);
-      if (items.length === 0) throw new Error("官方未返回课时（结构变化、无回放或未登录）");
+      if (items.length === 0) {
+        // 区分「结构正常但无回放」与「结构变化」（真机实测：records 空数组 = 课程未录/未开放）
+        const hasRecordsShape =
+          typeof json === "object" &&
+          json !== null &&
+          typeof (json as { data?: { records?: unknown } }).data?.records !== "undefined";
+        if (hasRecordsShape) {
+          setMsg({ kind: "ok", text: "本课程暂无课时回放（可能课程还没开或未录制）" });
+          await fetch(`/api/classroom/courses/${activeCourse.id}/lessons/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: [] }),
+          });
+          setLessons([]);
+          return;
+        }
+        throw new Error("官方课时数据结构变化");
+      }
       const r = await fetch(`/api/classroom/courses/${activeCourse.id}/lessons/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -172,7 +258,7 @@ export default function ClassroomPage() {
       setMsg({ kind: "ok", text: `课时已更新：${d.inserted} 讲` });
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
-      setError(`刷新课时失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境。`);
+      setError(`刷新课时失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境；若持续失败可重新点「登录 CVS」刷新凭据。`);
     } finally {
       setBusy(null);
     }
@@ -183,7 +269,8 @@ export default function ClassroomPage() {
     setBusy("取流中");
     setError(null);
     try {
-      const json = await proxyFetch(`/v1/course_vod_videoinfos?courId=${lesson.cour_id}`);
+      // 取流接口/参数按参考项目真机验证：course_vod_urls_new?courseId=（course_vod_videoinfos?courId= 会 500）
+      const json = await proxyFetch(`${CVS_API_BASE}/course_vod_urls_new?courseId=${lesson.cour_id}`);
       const views = extractVodViews(json);
       if (views.length === 0) throw new Error("未取到可播放机位（转码中或结构变化）");
       setPlaying({ lesson, views, viewIdx: 0, viaProxy: false });
@@ -196,11 +283,6 @@ export default function ClassroomPage() {
     }
   }
 
-  const shown = q.trim()
-    ? courses.filter((c) =>
-        `${c.subj_name} ${c.tecl_name} ${c.tecl_code} ${c.term}`.toLowerCase().includes(q.trim().toLowerCase())
-      )
-    : courses;
   const playingSrc =
     playing ? (playing.viaProxy ? toProxyUrl(playing.views[playing.viewIdx].url) : playing.views[playing.viewIdx].url) : "";
 
@@ -238,13 +320,6 @@ export default function ClassroomPage() {
               登录 CVS
             </button>
             <button
-              onClick={syncCourses}
-              disabled={busy !== null}
-              title="从官方平台同步我的课程（需已登录 + 校内网/VPN）"
-              className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
-              {busy === "同步课程" ? "同步中…" : "⟳ 同步课程"}
-            </button>
-            <button
               onClick={() => setCookieOpen(true)}
               title="页面内登录无法完成时，手动复制官方页 Cookie 粘贴"
               className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50">
@@ -279,26 +354,78 @@ export default function ClassroomPage() {
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="搜索课程 / 教师 / 学期"
+                placeholder="搜索课程名（如：高等数学）"
                 className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-[12px] outline-none focus:border-neutral-400"
               />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              {shown.length === 0 ? (
+              {q.trim() ? (
+                /* ── 远程搜索结果（全校课程；搜到自己那门点 + 添加） ── */
+                searching ? (
+                  <div className="mt-6 text-center text-[12px] text-neutral-400">搜索中…（官方接口约 2-6 秒）</div>
+                ) : searchErr ? (
+                  <div className="mt-4 rounded border border-red-200 bg-red-50 p-2.5 text-[11.5px] leading-5 text-red-700">
+                    搜索失败：{searchErr}
+                    <br />
+                    请确认已登录 CVS 且在校内网/VPN 环境
+                  </div>
+                ) : searchResults.length === 0 ? (
+                  <div className="mt-6 text-center text-[12px] text-neutral-400">没有匹配的课程</div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {searchResults.map((it) => {
+                      const teclId = String(it.id ?? "");
+                      const added = courses.some((c) => c.tecl_id === teclId);
+                      const name = String(it.subjName || it.teclName || "");
+                      return (
+                        <div key={teclId} className="flex items-start gap-2 rounded-lg border border-neutral-200 p-2.5">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[12.5px] font-medium text-neutral-800" title={name}>
+                              {name}
+                            </div>
+                            <div className="truncate text-[10.5px] text-neutral-500">
+                              {String(it.teclName || "")}
+                              {it.teclCode ? ` (${String(it.teclCode)})` : ""}
+                            </div>
+                            <div className="truncate text-[10.5px] text-neutral-400">
+                              {itemTeachers(it)}
+                              {termFromTeclCode(String(it.teclCode ?? ""))
+                                ? ` · ${termFromTeclCode(String(it.teclCode ?? ""))}`
+                                : ""}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => addCourse(it)}
+                            disabled={added || busy !== null}
+                            className={`shrink-0 rounded-md border px-2.5 py-1 text-[11px] ${
+                              added
+                                ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+                                : "border-neutral-300 text-neutral-600 hover:bg-neutral-50"
+                            } disabled:opacity-60`}>
+                            {added ? "✓ 已添加" : "+ 添加"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {hasMore && (
+                      <button
+                        onClick={loadMoreSearch}
+                        disabled={busy !== null}
+                        className="rounded-lg border border-dashed border-neutral-300 py-2 text-[11.5px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
+                        {busy === "加载更多" ? "加载中…" : "加载更多（同名班跨多年份时首页可能被老班占满）"}
+                      </button>
+                    )}
+                  </div>
+                )
+              ) : courses.length === 0 ? (
                 <div className="mt-8 text-center text-[12px] leading-6 text-neutral-400">
-                  {courses.length === 0 ? (
-                    <>
-                      还没有课程缓存
-                      <br />
-                      先「登录 CVS」，再点「同步课程」
-                    </>
-                  ) : (
-                    "没有匹配的课程"
-                  )}
+                  还没有已添加的课程
+                  <br />
+                  先「登录 CVS」，再在上方搜索课程名
                 </div>
               ) : (
                 <div className="flex flex-col gap-2.5">
-                  {shown.map((c) => (
+                  {courses.map((c) => (
                     <button
                       key={c.id}
                       onClick={() => openCourse(c)}
@@ -479,7 +606,7 @@ export default function ClassroomPage() {
                   <>
                     从左侧开始：
                     <br />
-                    「登录 CVS」→「同步课程」→ 选课 → 刷课时 → 看回放
+                    「登录 CVS」→ 搜索课程名 → 点「+ 添加」→ 选课 → 刷课时 → 看回放
                   </>
                 ) : (
                   <>← 选择一门课程</>
@@ -511,6 +638,28 @@ export default function ClassroomPage() {
       )}
     </div>
   );
+}
+
+/** 按 teclCode 降序：班号前缀就是学期码（202620272B… = 2026-2027学年第2学期），新学期排前 */
+function sortNewest(items: CvsCourseItem[]): CvsCourseItem[] {
+  return [...items].sort((a, b) =>
+    String(b.teclCode ?? "").localeCompare(String(a.teclCode ?? ""))
+  );
+}
+
+/** 班号前缀解学期：teclCode 格式 `YYYYYYSxxx`（如 202620272B042204001 → 2026-2027学年 第2学期） */
+function termFromTeclCode(code: string): string {
+  const m = code.match(/^(\d{4})(\d{4})(\d)/);
+  return m ? `${m[1]}-${m[2]}学年 第${m[3]}学期` : "";
+}
+
+/** 搜索结果条目的师资（teacherList[].userName，同 user 对象结构） */
+function itemTeachers(it: CvsCourseItem): string {
+  if (!Array.isArray(it.teacherList)) return "";
+  return (it.teacherList as unknown[])
+    .map((t) => String((t as { userName?: unknown } | null)?.userName ?? ""))
+    .filter(Boolean)
+    .join("，");
 }
 
 /** teac_names 是 JSON 数组字符串，解析失败按原文显示 */
