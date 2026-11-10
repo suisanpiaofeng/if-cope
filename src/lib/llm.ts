@@ -2,18 +2,30 @@ import { getSettings, isModelConfigured, recordUsage } from "./db";
 import { estimateTokens } from "./embed";
 import { modelEndpoint, modelHeaders } from "./modelGateway";
 import { buildSystemPrompt } from "./agent/system";
-import { TOOLS, executeTool, type ToolCall } from "./agent/tools";
+import { TOOLS, type ToolCall } from "./agent/tools";
+import { runTool } from "./agent/executor";
+import { getTodos, type TodoItem } from "./agent/todo";
+import { LoopGuard } from "./agent/loopGuards";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 /** 工具活动事件（推给前端展示"AI 正在操作应用"） */
 export type ToolEvent = {
+  callId?: string; // 调用唯一 ID（route.ts 手工事件可缺省）
   name: string;
   phase: "start" | "done" | "error";
   detail?: string;
+  round: number; // 所属轮次（手工事件为 0）
+  intent?: string; // 该轮意图（一句话）
 };
 
-export type ChatEvent = { delta?: string; reasoning?: string; tool?: ToolEvent };
+export type ChatEvent = {
+  delta?: string;
+  reasoning?: string;
+  tool?: ToolEvent;
+  plan?: { todos: TodoItem[] }; // todo_write 成功后推送清单快照（任务面板用）
+  run?: { round: number; maxRounds: number; intent?: string }; // 轮次心跳
+};
 
 /** 发给模型的消息（含 tool_calls / tool 角色） */
 type ApiMessage =
@@ -30,7 +42,8 @@ export async function* streamChat(
   question: string,
   contextBlocks: string[],
   history: ChatMessage[],
-  sourceIds: number[] = []
+  sourceIds: number[] = [],
+  threadId: number
 ): AsyncGenerator<ChatEvent> {
   const s = getSettings();
   if (!isModelConfigured(s)) {
@@ -53,21 +66,30 @@ export async function* streamChat(
   const total = { prompt: 0, completion: 0 };
   let answerText = "";
 
-  // 工具循环：最多 5 轮带工具的调用；最后一轮不带工具，强制模型给出文字回答
-  for (let round = 0; round < 6; round++) {
-    const useTools = round < 5;
+  // Agent Loop（规格 §3.2）：maxRounds 轮带工具 + 1 轮强制文字收尾。
+  // 每轮从表读最新任务清单注入（用户面板手改后模型能感知）；工具事件带 callId/round/intent；
+  // 护栏提示随工具结果回喂；todo_write 成功后推送清单快照。
+  const maxRounds = Number(process.env.IFCOPE_AGENT_MAX_ROUNDS ?? 8);
+  const guard = new LoopGuard(16);
+  for (let round = 0; round <= maxRounds; round++) {
+    const useTools = round < maxRounds;
+    messages[0] = { role: "system", content: buildSystemPrompt(sourceIds, getTodos(threadId)) };
     // 手动迭代：转发增量给消费者的同时，截获工具调用与累计答案文本
     const it = streamOnce(s, messages, useTools)[Symbol.asyncIterator]();
     let step = await it.next();
-    let toolCalls: RawToolCall[] = []
-    let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
+    let roundText = "";
     while (!step.done) {
-      if (step.value.delta) answerText += step.value.delta;
-      yield step.value; // 含 delta / reasoning / tool，原样转发
+      if (step.value.delta) {
+        roundText += step.value.delta;
+        answerText += step.value.delta;
+      }
+      yield step.value; // 含 delta / reasoning，原样转发
       step = await it.next();
     }
-    toolCalls = step.value.toolCalls;
-    usage = step.value.usage;
+    const toolCalls = step.value.toolCalls;
+    const usage = step.value.usage;
+    const intent = extractIntent(roundText);
+    yield { run: { round, maxRounds, intent } };
     if (usage) {
       total.prompt += usage.prompt_tokens ?? 0;
       total.completion += usage.completion_tokens ?? 0;
@@ -77,21 +99,33 @@ export async function* streamChat(
 
     messages.push({ role: "assistant", content: null, tool_calls: toolCalls });
 
-    for (const raw of toolCalls) {
+    let todoUpdated = false;
+    for (let i = 0; i < toolCalls.length; i++) {
+      const raw = toolCalls[i];
       const name = raw.function.name;
-      yield { tool: { name, phase: "start" } };
+      const callId = `call_${round}_${i}`;
+      yield { tool: { callId, name, phase: "start", round, intent } };
       let result: string;
       try {
         const args = (raw.function.arguments ? JSON.parse(raw.function.arguments) : {}) as Record<string, unknown>;
         const call: ToolCall = { id: raw.id, name, args };
-        result = await executeTool(call, { threadId: 0 }); // TODO(Task 4): 换真实 threadId
-        yield { tool: { name, phase: "done", detail: result.replace(/\s+/g, " ").slice(0, 160) } };
+        result = await runTool(call, { threadId });
+        if (name === "todo_write") todoUpdated = true;
+        yield { tool: { callId, name, phase: "done", round, intent, detail: result.replace(/\s+/g, " ").slice(0, 160) } };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        yield { tool: { name, phase: "error", detail: msg.slice(0, 200) } };
+        yield { tool: { callId, name, phase: "error", round, intent, detail: msg.slice(0, 200) } };
         result = `工具执行失败：${msg}。请向学生说明原因，或换一种方式处理。`;
       }
+      // 护栏提示（重复调用/预算用尽）随工具结果回喂，模型自行收敛
+      const warn = guard.record(name, raw.function.arguments ?? "");
+      if (warn) result = `${result}\n\n【护栏】${warn}`;
       messages.push({ role: "tool", tool_call_id: raw.id, content: result });
+    }
+    if (todoUpdated) yield { plan: { todos: getTodos(threadId) } };
+    // 末个工具轮后提示收敛（下一轮强制纯文字）
+    if (round === maxRounds - 1) {
+      messages.push({ role: "user", content: "轮次预算即将用尽，请收敛任务并给出总结" });
     }
   }
 
@@ -99,6 +133,15 @@ export async function* streamChat(
   if (!answerText.trim()) {
     yield { delta: "（模型未返回内容，请换个说法重试）" };
   }
+}
+
+/** 意图提取：该轮 content 首个非空行、单行化、截 80 字符（供时间线显示“为什么调这个工具”） */
+function extractIntent(text: string): string | undefined {
+  const line = text
+    .split("\n")
+    .map((l) => l.trim())
+    .find(Boolean);
+  return line ? line.replace(/\s+/g, " ").slice(0, 80) : undefined;
 }
 
 /** 单次模型调用：流式转发 content/reasoning 增量；结束后返回累积的工具调用。 */

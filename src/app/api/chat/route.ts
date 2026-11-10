@@ -78,18 +78,24 @@ export async function POST(req: NextRequest) {
         send({ threadId: tid, citations: hits });
         if (webHits.length) {
           // 活动面板里展示「联网搜索」结果数（与工具活动同 UI）
-          send({ tool: { name: "web_search", phase: "done", detail: `已联网检索 ${webHits.length} 条参考` } });
+          send({ tool: { name: "web_search", phase: "done", detail: `已联网检索 ${webHits.length} 条参考`, round: 0 } });
         }
         let full = "";
         let reasoningFull = "";
         const finalBlocks = webHits.length ? [...contextBlocks, webHitsToContext(webHits)] : contextBlocks;
-        for await (const part of streamChat(question.trim(), finalBlocks, history, sourceIds)) {
+        for await (const part of streamChat(question.trim(), finalBlocks, history, sourceIds, tid)) {
           if (part.reasoning) {
             reasoningFull += part.reasoning;
             send({ reasoning: part.reasoning });
           }
           if (part.tool) {
             send({ tool: part.tool });
+          }
+          if (part.plan) {
+            send({ plan: part.plan });
+          }
+          if (part.run) {
+            send({ run: part.run });
           }
           if (part.delta) {
             full += part.delta;
