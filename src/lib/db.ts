@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS agent_todos (
   status TEXT NOT NULL DEFAULT 'pending',
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS user_prefs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  text TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual',
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS prompt_overrides (
+  key TEXT PRIMARY KEY,
+  content TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS classroom_courses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
@@ -227,6 +238,8 @@ export type ModelSettings = {
   translateBaseUrl?: string;
   translateApiKey?: string;
   translateModel?: string;
+  /** 用户级指令（个性化：AGENTS.md 式自由文本，运行时注入所有 LLM 场景） */
+  userDirective?: string;
 };
 
 const EMPTY: ModelSettings = {
