@@ -191,6 +191,7 @@ embed_meta(key PK, value)  -- embed_dim 自愈（启动时对首条向量校验�
 
 **运维要点**：
 - 3778 端口占用：`netstat -ano | grep 3778`；反代随应用启动（instrumentation），改 `cookieRewrite/revProxy` 必须重启才生效。
+- **`npm run build` 与 dev 共享 `.next` 目录会互砸**：build 后必须重启 dev（否则页面 `Cannot find module './xxxx.js'` Runtime Error）。
 - 凭据过期：搜课/课时/播放报 500 → 重新点「登录 CVS」；仍不行用 Cookie 兜底。
 - **本机代理客户端劫持案例（2026-11-10）**：HypoMux（sing-box TUN）劫持 DNS 把 cvs.seu.edu.cn 解析到 fake-ip（198.18.x）并重置出站——浏览器（DoH）正常但反代全超时。诊断：`nslookup cvs.seu.edu.cn` 看是否 198.18.x；修复：退出/加直连规则。交接时注意此类网络层坑。
 - 上游搜索接口 2-6 秒、偶发断连——前端 fetch 有自动重试；上游卡死有 15s 超时保护。
