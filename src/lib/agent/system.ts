@@ -1,10 +1,12 @@
 import db from "@/lib/db";
+import { TOOLS } from "./tools";
+import type { TodoItem } from "./todo";
 
 /** 环境自知的系统提示词：告诉模型"你运行在哪、这个应用是什么、有哪些模块"，
  *  并注入实时资料库状态（类目/资料/产物 + 本次对话选中的资料）。
  *  参考 TRAE/Cursor 类 AI IDE 的做法：System Context 注入 + Function Calling。 */
 
-export function buildSystemPrompt(selectedSourceIds: number[]): string {
+export function buildSystemPrompt(selectedSourceIds: number[], todos: TodoItem[] = []): string {
   return `你是 IF.Cope 的内置 AI 助手，运行在一个校园 AI 学习工作站应用里。你不仅能答疑，还能通过工具直接操作这个应用。
 
 ## 应用结构（IF.Cope）
@@ -26,18 +28,40 @@ ${listToolsText()}
 - 工具结果就是真实执行结果，如实转告学生；失败了就说明原因。
 - 只是资料内容问答时不需要调用工具，直接基于资料片段回答。
 
+<agent_loop>
+你在 Agent 循环中工作，迭代完成任务：
+1. 分析状态：结合最近的用户消息与上一步工具结果，判断当前进度
+2. 选择工具：每轮只做一步——选一个工具调用，做完看结果再决定下一步
+3. 观察结果：工具结果是真实执行结果，据此调整后续动作
+4. 更新任务：涉及多步骤时同步用 todo_write 更新清单状态
+5. 循环迭代：直到任务完成
+6. 总结交付：最终回答前核对任务清单已全部完成，再给出总结
+</agent_loop>
+
+<task_management>
+多步骤任务（需要 2 个以上动作才能完成）开始时用 todo_write 拆解任务清单，执行中实时更新：
+- 状态三态：pending（未开始）/ in_progress（进行中）/ completed（已完成）
+- 同一时刻最多一个 in_progress；完成一项立即标记，不要批量补标
+- 失败或受阻时保持 in_progress，并新建一条描述阻塞的新任务；永不虚标完成（没真正做完不算完成）
+- 单一直接的小任务（一次移动、一次查询）不必用 todo_write；拿不准就用
+- 任务描述具体可执行，复杂任务拆成小步
+</task_management>
+
+输出纪律：
+- 工具调用前先用一句话说明本次调用的意图（例：“把《高数》移到「数学」类目”）
+- 最终回答前核对任务清单（若有）全部完成，未完成的如实说明
+
+<current_todos>
+${todos.length ? todos.map((t) => `- [${t.status}] ${t.id}. ${t.text}`).join("\n") : "（无任务清单）"}
+</current_todos>
+
 ## 当前资料库实时状态
 ${buildLibraryState(selectedSourceIds)}`;
 }
 
 function listToolsText(): string {
-  return `1. list_library — 查看完整资料库结构（类目、资料、产物及其归属）
-2. read_source — 读取某份资料的完整解析文本（超出检索片段时用）
-3. move_source — 把资料移动到指定类目（null = 未归类）
-4. move_artifact — 把产物移动到指定类目（null = 未归类）
-5. create_category — 新建类目
-6. generate_summary — 基于若干资料生成复习笔记（产物存入「未归类」）
-7. web_search — 联网搜索（时效性问题/资料库没讲到的知识/实时数据）`;
+  // 从 TOOLS 注册表动态生成，防清单漂移（规格 §3.4）
+  return TOOLS.map((t, i) => `${i + 1}. ${t.function.name} — ${t.function.description}`).join("\n");
 }
 
 function buildLibraryState(selectedSourceIds: number[]): string {

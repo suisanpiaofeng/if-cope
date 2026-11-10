@@ -1,12 +1,16 @@
 import db from "@/lib/db";
 import { generateSummary } from "@/lib/artifact";
 import { webSearch, webHitsToContext } from "@/lib/webSearch";
+import { replaceTodos, type TodoItem } from "./todo";
 
 /** Agent 工具：OpenAI function calling 格式。
  *  定义（TOOLS）给模型看；executeTool（执行器）在服务端真实操作数据库。
  *  模型只传 id/参数，所有写操作都在这里做校验。 */
 
 export type ToolCall = { id: string; name: string; args: Record<string, unknown> };
+
+/** 工具执行上下文（todo_write 等会话级工具需要知道归属会话） */
+export type ToolContext = { threadId: number };
 
 export const TOOLS = [
   {
@@ -99,11 +103,46 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "todo_write",
+      description: "更新当前对话的任务清单（传入完整清单，幂等覆盖）。多步骤任务开始时先拆解清单，执行中实时更新状态",
+      parameters: {
+        type: "object",
+        properties: {
+          todos: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "integer", description: "任务序号" },
+                text: { type: "string", description: "任务描述" },
+                status: { type: "string", enum: ["pending", "in_progress", "completed"], description: "状态" },
+              },
+              required: ["id", "text", "status"],
+            },
+          },
+        },
+        required: ["todos"],
+      },
+    },
+  },
 ] as const;
 
 /** 执行工具调用：返回给模型的文本结果；失败抛错（由调用方转成错误文本回喂模型） */
-export async function executeTool(call: ToolCall): Promise<string> {
+export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<string> {
   switch (call.name) {
+    case "todo_write": {
+      const arr = call.args.todos;
+      if (!Array.isArray(arr)) throw new Error("todos 必须是数组");
+      const items = arr as TodoItem[];
+      replaceTodos(ctx.threadId, items);
+      const doing = items.filter((t) => t.status === "in_progress").length;
+      const doneN = items.filter((t) => t.status === "completed").length;
+      return `已更新任务清单：${items.length} 项（进行中 ${doing} / 完成 ${doneN}）`;
+    }
+
     case "list_library": {
       const cats = db.prepare("SELECT id, name FROM categories ORDER BY id").all() as { id: number; name: string }[];
       const sources = db

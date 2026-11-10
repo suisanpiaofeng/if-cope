@@ -84,7 +84,7 @@ export async function* streamChat(
       try {
         const args = (raw.function.arguments ? JSON.parse(raw.function.arguments) : {}) as Record<string, unknown>;
         const call: ToolCall = { id: raw.id, name, args };
-        result = await executeTool(call);
+        result = await executeTool(call, { threadId: 0 }); // TODO(Task 4): 换真实 threadId
         yield { tool: { name, phase: "done", detail: result.replace(/\s+/g, " ").slice(0, 160) } };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
