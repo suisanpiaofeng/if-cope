@@ -171,21 +171,32 @@ embed_meta(key PK, value)  -- embed_dim 自愈（启动时对首条向量校验�
 
 ## 9. 待办 / roadmap（下一会话从这里接）
 
-### 9.1 课堂专区 v3（原生 UI，`classroom-v2` 分支，待真机登录校准）
+### 9.1 课堂专区 v3（原生 UI，`classroom-v2` 分支，2026-11-10 真机全链验收通过）
 
-**架构**（规格 `docs/superpowers/specs/2026-11-09-classroom-native-ui-design.md`，修订 v2 D1）：原生 UI 看 CVS 回放——前端经反代 3778（带浏览器托管 Cookie）调官方接口拉目录/取流，3777 只做元数据 SQLite 落库，`<video>` 直连官方媒体直链（失败自动切 `/__h/` 代理兜底一次）；iframe 内嵌方案已彻底移除（含反代导航收敛注入）。
+**架构**（规格 `docs/superpowers/specs/2026-11-09-classroom-native-ui-design.md`，修订 v2 D1）：原生 UI 看 CVS 回放——前端经反代 3778（浏览器托管 Cookie）调官方接口拉目录/取流，3777 只做元数据 SQLite 落库，`<video>` 直连官方媒体直链（失败自动切 `/__h/` 代理兜底一次）；iframe 方案已彻底移除（含反代导航收敛注入）。
 
-**已实现（2026-11-09）**：`/classroom` 三态原生页（课程卡片列表+本地搜索 → 课时表+转码灰态 → 机位播放器）；接口层 `src/lib/classroom/{types,store}.ts`（常量/字段提取器单点修）；API `courses` GET/sync/DELETE + `courses/[id]/lessons` GET/sync（同步带结构校验，不符整体拒 400 不写半包）；旧空 `classroom_*` 表启动时自动 DROP 重建为 v3 列（带 user_id，D6）；合规声明拦截/Cookie 兜底/登录态轮询沿用。CDP 冒烟 14 PASS（声明/列表/搜索/课时/灰态/服务失败横幅+缓存不丢）。
+**产品形态（官方同款，搜索式）**：官方平台的「我的课程」就是「搜全校课程 → 点选自己的班」。本专区同款：左栏搜索（`condition` 参数，防抖 400ms）→ 结果按学期降序（班号前缀即学期码）+「加载更多」翻页 →「+ 添加」→ 进课 → 刷课时 → 播放。**无全量同步**（响应含全校名单且合规上不应缓存无关教学班；落库只取白名单课程元数据，响应里的他人 studentList 绝不入库）。
 
-**已实证（2026-11-09，未登录直连）**：`/v1/teachingclass/list`、`/v1/subject_vod_list_new`、`/v1/course_vod_videoinfos` 三路径在真实服务器存在（返回 401 JSON 而非 404）；官方 SPA 静态资源公网可拉，接口逆向工具 `scripts/recon/scan_api.js`。
+**真机校准结论（2026-11-10，校园网直连，全部实测）**：
+1. **接口三件套**（基址 `{反代}/jy-application-resourcemanage/v1`，缺前缀会 404）：
+   - 搜索/我的课程：`GET /teachingclass/list?pageIndex=1&pageSize=100&type=4&allType=1&condition=<词>`。**参数名不带 `page.` 前缀；`type` 必填（缺则上游 500）**。响应 `data.list[].{id(=teclId), subjId, subjCode, subjName(可null→teclName兑底), teclCode, teclName, teclImgUrl, acteName(可null), teacherList[].userName}`。上游响应 2-6 秒属常态，前端 fetch 已加重试。
+   - 课时：`GET /subject_vod_list_new?page.pageIndex=1&page.pageSize=1000&teclIds=<teclId>&page.orders[0].asc=false&page.orders[0].field=courBeginTime&schoolOpenStatusFlag=false` → `data.records[]`，元素 `{id, courBeginTime, letiNumber, vodStatus}`（5=可播、4=转码/未开、9=不可播、-3=转码中）。
+   - 取流：`GET /course_vod_urls_new?courseId=<课时id>`（**参数名 courseId 不是 courId；course_vod_videoinfos 是另一用途会 500**）→ `data.courseVodViewList[]`，每路 `{viewNum, url}`（5=课堂混音、3=录音、1=无声录屏、2/4=学生机位、6=电子教鞭）。URL 为直链。
+2. **id 体系**：teachingclass/list 的 `id` 就是 teclId（与 play-center 一致）；课时记录的 `id` 就是取流的 courseId。同名课跨多年份多班，**班号前缀是学期码**（`202620272B042204001` = 2026-2027学年第2学期）；搜索结果已按学期降序防挑错班。
+3. **凭据行为**：会话 Cookie 落 localhost:3778 且 Path=/（Set-Cookie 改写）；**凭据过期时上游对复杂查询回 500 而非 401**，简单接口（whoami）仍 200——UI 文案已引导「重新点登录 CVS 刷新凭据」。
+4. **分享链接解密**：官方 play-center 分享链接是加密 blob（`mko2GS…`），`scripts/recon/decrypt-share-blob.js` 可解出明文 teclId/teclCode 等（AES 密钥在 SPA 前端）；解密结果可能含登录 JWT，勿写文档。
+5. **接口逆向工具**：`scripts/recon/scan_api.js`（官方 SPA 公网可拉，chunk 内 API 定义/调用上下文扫描，M2 字幕接口侦察复用）。
 
-**真机联调清单（校园网 + 已登录，Task 6 未决）**：
-1. **字段包裹层校准**：登录后点「同步课程」，若报「结构变化/未返回课程」，看 F12 Network 的 `teachingclass/list` 实际响应 → 改 `types.ts` 的 `extractListItems` 单点；课时表同理改 `subject_vod_list_new`。
-2. **媒体直链**：点课时若「播放失败」→ 看 `course_vod_videoinfos` 返回的 url 主机名/字段路径 → 若被改名改 `extractVodViews`；若需 Referer/Cookie，确认自动切 `/__h/` 代理兜底后能否播（非 `*.seu.edu.cn` 域会被反代拦截属预期）。
-3. **登录链（沿 v2 已验证结论）**：顶栏「登录 CVS」顶层窗口走 CAS；失败用 Cookie 兜底粘贴。
-4. **整链验收**：登录 → 同步 → 选课 → 刷新课时 → 播放切机位 → 转码中灰态 → 杀 3778 再同步出横幅且列表在。
+**已实现代码面**：`/classroom` 三态原生页（搜索/课程列表 → 课时表+转码灰态 → 机位播放器）；`src/lib/classroom/{types,store}.ts`（常量/字段单点修）；API `courses` GET/sync/DELETE + `courses/[id]/lessons` GET/sync（结构校验，不符整体拒 400）；旧空 `classroom_*` 表启动自动迁移为 v3 列（带 user_id）；合规声明拦截/Cookie 兜底/登录态轮询沿用；反代（revProxy）带请求行日志（method/url/状态/耗时）。
 
-**运维要点**：3778 端口占用排查（`netstat -ano | grep 3778`）；Cookie 过期 = 同步/刷新报 401 →「登录 CVS」重登或 Cookie 兜底；上游卡死有 15s 超时保护（不会永久转圈）。
+**运维要点**：
+- 3778 端口占用：`netstat -ano | grep 3778`；反代随应用启动（instrumentation），改 `cookieRewrite/revProxy` 必须重启才生效。
+- 凭据过期：搜课/课时/播放报 500 → 重新点「登录 CVS」；仍不行用 Cookie 兜底。
+- **本机代理客户端劫持案例（2026-11-10）**：HypoMux（sing-box TUN）劫持 DNS 把 cvs.seu.edu.cn 解析到 fake-ip（198.18.x）并重置出站——浏览器（DoH）正常但反代全超时。诊断：`nslookup cvs.seu.edu.cn` 看是否 198.18.x；修复：退出/加直连规则。交接时注意此类网络层坑。
+- 上游搜索接口 2-6 秒、偶发断连——前端 fetch 有自动重试；上游卡死有 15s 超时保护。
+- 数据库备份：`data/backups/ifcope-pre-classroom-20261027-182233.db`（课堂功能前的快照，唯一数据安全网，建议保留）。
+
+**遗留**：① 媒体直链在异常网络下是否需 Referer/Cookie 未遇场景（兜底 `3778/__h/` 已实现，非 `*.seu.edu.cn` 域被拦属预期）；② v2 的逐课笔记/期末手册（M2/M3）未实施，字幕接口路径已登记于规格 §2 供后续；③ 观看记录不回流官方平台（接受，规格 §2）。
 
 **AIGC 目录已移除（2026-11-04）**：不再有固定的 AIGC 类目；所有产物（笔记/知识地图/翻译）默认落「未归类」，可拖入任意类目。db.ts 启动时自动迁移（解散 pinned=1 或名为 AIGC 的类目：内容回未归类、子类目提顶级、删行）。PDF 译文更进一步：直接入库为资源（type=翻译，与原文同类目），不再造产物行，历史由翻译页从资源推导（兼容旧产物）。getAigcCategoryId 函数已删除。译文资源带 origin_id 列（指向原文 id）：翻译页资源栏显示全部 PDF（已译带✓绿标、批量翻译自动跳过）；历史翻译仅本页显示，点击打开原文↔译文对照（无 origin 关联的旧数据回退单栏）。
 

@@ -17,13 +17,13 @@
 | 用途 | 接口 | 说明 |
 |---|---|---|
 | 登录态探测 | `GET /__whoami`（反代自有） | 已有，沿用 |
-| 我的课程（教学班） | `GET /v1/teachingclass/list` | GET + 分页；卡片字段：`subjName` 课程名、`teclName/teclCode` 教学班、`teacNames[]` 教师、`acteName` 学年学期、`teclImgUrl` 封面、`teclId`、`subjId` |
-| 课时（回放）列表 | `GET /v1/subject_vod_list_new?teclIds=<teclId>&page.pageSize=1000&page.orders[0].asc=false&page.orders[0].field=courBeginTime` | 参考项目已验证；含转码状态 |
-| 播放取流 | `GET /v1/course_vod_videoinfos?courId=<courId>` | 返回 `courseVodViewList[]`，每路 `{viewNum, url}`；viewNum 1-6 = 教师/学生/PPT/电子教鞭等机位；URL 为直链（curl 可下载） |
+| 全校课程搜索（「我的课程」页同款） | `GET /v1/teachingclass/list?pageIndex=&pageSize=20&type=4&allType=1&condition=<关键词>` | **2026-11-10 真机校准**：参数名用 `pageIndex`（不带 `page.` 前缀）；`type` 必填（缺则上游 500）；官方产品形态=搜索式（可搜到全校课，点选自己的班）；响应 `data.list[].{id(=teclId), subjId, subjCode, subjName(可null→teclName兑底), teclCode, teclName, teclImgUrl, acteName(可null), teacherList[].userName}`；**只取白名单字段落库**（响应含他人 studentList，合规红线）；勿拉全量（pageSize=100 时响应含全校名单，6s+/页） |
+| 课时（回放）列表 | `GET /v1/subject_vod_list_new?page.pageIndex=1&page.pageSize=1000&teclIds=<teclId>&page.orders[0].asc=false&page.orders[0].field=courBeginTime&schoolOpenStatusFlag=false` | 响应 `data.records[]`，元素 `{id, courBeginTime, letiNumber, vodStatus(5=可播, -3=转码中)}`；teclIds 就是教学班 id（subjId/班号不适用）；2026-11-10 平台故障期 records 空（接口/参数本身正常） |
+| 播放取流 | `GET /v1/course_vod_urls_new?courseId=<课时id>` | **2026-11-10 真机校准**：参数名是 `courseId`（不是 courId）；`course_vod_videoinfos` 是另一用途（传 courId 会 500）。返回 `data.courseVodViewList[]`，每路 `{viewNum, url}`；viewNum 5=课堂混音(aac)、3=录音(alaw)、1=无声录屏、2/4=学生机位、6=电子教鞭；URL 为直链（curl 可下载）。直链失败自动切 `3778/__h/` 兑底已实现；直链是否需 Referer/Cookie 待异常场景验证 |
 | AI 字幕 | `GET /v1/course/ai/translate/{courseId}`、`POST /v1/course/ai/translate/detail` | **本期不做**，登记路径供 M2 逐课笔记用 |
 | 播放统计 | `POST /v1/vod/keepAlive`、`/v1/vod/addVodWatchRecord`、`/v1/vod/recordPlayInfo` | **不做**。后果（接受）：官方平台的「观看记录/继续播放」不含我们 App 内的播放 |
 
-搜索 = 「我的课程」本地过滤（官方前端也是拉全量后过滤），不需要额外搜索接口。
+搜索 = 官方同款搜索式交互（`condition` 参数）：搜全校课程 → 找到自己的班 → 点「+ 添加」落本地库。**不做全量同步**（响应含全校名单，且合规上不应缓存无关教学班）。
 
 侦察工具：`scripts/recon/scan_api.js`（chunk 内 API 定义/调用上下文扫描），保留供 M2 复用。
 
@@ -110,13 +110,14 @@ classroom_lessons(        -- 一节课 = 一个回放
 | 风险 | 缓解 |
 |---|---|
 | 接口为当期 SPA 快照，官方改版即失效 | 接口路径/字段名集中常量区（单点修）；同步写库前字段校验，失败显式报错；本设计下无 iframe 应急（用户已确认），应急 = 浏览器直开官方站 |
-| `teachingclass/list` 响应字段名/分页结构待真机确认 | **路径已实证（2026-11-09 未登录直连 401 而非 404）**；字段名/包裹层 N3 真机联调校准（常量区集中，改 `types.ts` 一处） |
-| 媒体直链是否需 Referer/Cookie | **三播放接口路径已实证（401 存在）**；直链 N3 真机验证；兜底切 `3778/__h/` 转发（已有能力，非 `*.seu.edu.cn` 域被拦属预期） |
+| `teachingclass/list` 响应字段名/分页结构待真机确认 | **已实机校准（2026-11-10）**：字段/参数见 §2 表；`type` 必填、`pageIndex` 命名、白名单落库（响应含他人 studentList）已实现 |
+| 凭据过期表现为上游 500 而非 401 | 真机实测（2026-11-10）：反代域凭据过期时复杂查询 500、简单接口 200；UI 文案已引导「重新点登录 CVS 刷新凭据」 |
+| 媒体直链是否需 Referer/Cookie | **待平台故障修复后验证（2026-11-10 遗留）**；兜底切 `3778/__h/` 转发（已有能力，非 `*.seu.edu.cn` 域被拦属预期） |
 | 官方观看统计不回流 | 已接受（见 §2） |
 | 校园网外不可用 | 全链路显式报错，无静默失败 |
 
 ## 9. 里程碑
 
-- **N1 服务端**：建表 + courses/lessons sync 与查询 API（含字段校验）。
-- **N2 前端**：原生 UI（列表/搜索/课时/播放态/登录态/声明拦截），先 mock 联调。
-- **N3 移除 iframe + 反代瘦身 + 真机联调**：字段校准、媒体直连验证、tsc/build/CDP 冒烟、交接文档同步。
+- **N1 服务端**：建表 + courses/lessons sync 与查询 API（含字段校验）。✅ 2026-11-10
+- **N2 前端**：原生 UI（搜索式添加/课时/播放态/登录态/声明拦截）。✅ 2026-11-10（实现中形态从「全量同步」改为「搜索+单门添加」，见 §2）
+- **N3 移除 iframe + 反代瘦身 + 真机联调**：字段校准、媒体直连验证、tsc/build/CDP 冒烟、交接文档同步。✅ 2026-11-10（全链验收通过：登录→搜课→添加→课时 21 讲→播放；仅媒体直链异常场景未遇，见 §8）
