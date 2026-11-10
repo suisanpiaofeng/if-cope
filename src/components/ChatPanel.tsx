@@ -79,7 +79,9 @@ export default function ChatPanel({
   const [streaming, setStreaming] = useState(false);
   // 正在运行的任务：即使回到主界面/打开别的会话，流式仍在后台继续
   const [runThread, setRunThread] = useState<number | null>(null);
-  const [live, setLive] = useState<{ question: string; content: string; reasoning: string; citations: Citation[]; tools: LiveTool[]; plan: TodoItem[]; run?: { round: number; maxRounds: number; intent?: string } } | null>(null);
+  const [live, setLive] = useState<{ question: string; content: string; reasoning: string; citations: Citation[]; tools: LiveTool[]; run?: { round: number; maxRounds: number; intent?: string } } | null>(null);
+  // 任务清单独立于 live（自审修复：回答结束后面板不随 live 清空，人机共写可持续）
+  const [plan, setPlan] = useState<TodoItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [citation, setCitation] = useState<{ title: string; page: number | null; chunks: { page: number | null; text: string }[]; quote: string } | null>(null);
@@ -110,6 +112,9 @@ export default function ChatPanel({
       if (!res.ok) throw new Error(`加载失败（${res.status}）`);
       const data = await res.json();
       if (threadIdRef.current === id) setMessages(mapMsgs(data));
+      // 载入该会话的任务清单（人机共写：打开会话即可继续编辑）
+      const pt = await fetch(`/api/agent/todos?threadId=${id}`).then((r) => r.json()).catch(() => null);
+      if (threadIdRef.current === id) setPlan(pt?.todos ?? []);
     } catch (e) {
       if (threadIdRef.current === id) {
         setMessages([]);
@@ -147,7 +152,8 @@ export default function ChatPanel({
     setView("chat");
     setStreaming(true);
     setRunThread(threadId); // 新对话时为 null，与 threadId 一致
-    setLive({ question, content: "", reasoning: "", citations: [], tools: [], plan: [] });
+    setLive({ question, content: "", reasoning: "", citations: [], tools: [] });
+    if (!threadId) setPlan([]); // 新会话从空清单开始；已有会话保留当前清单
     // 开启一段工作：选中状态回归初始（拖入已并入勾选，一并清空）
     onSelectionReset();
     let tid = threadId;
@@ -177,7 +183,7 @@ export default function ChatPanel({
           }
           if (evt.citations) setLive((l) => (l ? { ...l, citations: evt.citations } : l));
           if (evt.tool) setLive((l) => (l ? { ...l, tools: mergeTool(l.tools, evt.tool) } : l));
-          if (evt.plan) setLive((l) => (l ? { ...l, plan: evt.plan.todos } : l));
+          if (evt.plan) setPlan(evt.plan.todos);
           if (evt.run) setLive((l) => (l ? { ...l, run: evt.run } : l));
           if (evt.reasoning) setLive((l) => (l ? { ...l, reasoning: l.reasoning + evt.reasoning } : l));
           if (evt.delta) setLive((l) => (l ? { ...l, content: l.content + evt.delta } : l));
@@ -420,11 +426,11 @@ export default function ChatPanel({
               </div>
             )}
             {/* 任务面板：人机共写清单（状态/文本可改，写回 agent_todos，下轮模型能感知） */}
-            {liveOpen && live && live.plan.length > 0 && (
+            {plan.length > 0 && (
               <TodoPanel
-                todos={live.plan}
+                todos={plan}
                 threadId={threadId}
-                onChange={(todos) => setLive((l) => (l ? { ...l, plan: todos } : l))}
+                onChange={setPlan}
               />
             )}
             {/* 工具调用活动：AI 正在操作资料库（移动/生成笔记等），按轮次+意图展示 */}
@@ -434,7 +440,7 @@ export default function ChatPanel({
                   <div key={t.callId ?? i} className="flex items-start gap-1.5 text-[11px] leading-4 text-violet-700">
                     <span className="shrink-0">{t.phase === "run" ? "⏳" : t.phase === "done" ? "✅" : "❌"}</span>
                     <span className="min-w-0">
-                      {t.round > 0 ? <span className="text-violet-400">[第{t.round}轮] </span> : null}
+                      {t.round >= 0 ? <span className="text-violet-400">[第{t.round + 1}轮] </span> : null}
                       {TOOL_LABELS[t.name] ?? t.name}
                       {t.phase === "run" ? "…" : ""}
                       {t.intent ? <span className="text-violet-500"> — {t.intent}</span> : null}
