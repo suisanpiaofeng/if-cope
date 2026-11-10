@@ -51,6 +51,8 @@ export async function PUT(req: NextRequest) {
         : String(body.translateApiKey).trim(),
     }),
     ...(body.translateModel !== undefined && { translateModel: String(body.translateModel).trim() }),
+    // 用户级指令（个性化）：字段存在才更新（空串 = 清除）
+    ...(body.userDirective !== undefined && { userDirective: String(body.userDirective).trim() }),
   };
 
   if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
