@@ -71,23 +71,41 @@ export async function* streamChat(
   // 护栏提示随工具结果回喂；todo_write 成功后推送清单快照。
   const maxRounds = Number(process.env.IFCOPE_AGENT_MAX_ROUNDS ?? 8);
   const guard = new LoopGuard(16);
-  for (let round = 0; round <= maxRounds; round++) {
+  let resumesLeft = 2; // 断流续跑预算（Task 5）：最多续跑 2 次，计入轮次预算
+  for (let round = 0; round <= maxRounds + 2; round++) {
     const useTools = round < maxRounds;
     messages[0] = { role: "system", content: buildSystemPrompt(sourceIds, getTodos(threadId)) };
     // 手动迭代：转发增量给消费者的同时，截获工具调用与累计答案文本
-    const it = streamOnce(s, messages, useTools)[Symbol.asyncIterator]();
-    let step = await it.next();
     let roundText = "";
-    while (!step.done) {
-      if (step.value.delta) {
-        roundText += step.value.delta;
-        answerText += step.value.delta;
+    let toolCalls: RawToolCall[] = [];
+    let usage: { prompt_tokens?: number; completion_tokens?: number } | null = null;
+    try {
+      const it = streamOnce(s, messages, useTools)[Symbol.asyncIterator]();
+      let step = await it.next();
+      while (!step.done) {
+        if (step.value.delta) {
+          roundText += step.value.delta;
+          answerText += step.value.delta;
+        }
+        yield step.value; // 含 delta / reasoning，原样转发
+        step = await it.next();
       }
-      yield step.value; // 含 delta / reasoning，原样转发
-      step = await it.next();
+      toolCalls = step.value.toolCalls;
+      usage = step.value.usage;
+    } catch {
+      // 断流续跑（Task 5）：已产出内容不报废；续跑一轮计入轮次预算，最多 2 次
+      if (resumesLeft > 0) {
+        resumesLeft -= 1;
+        if (roundText) messages.push({ role: "assistant", content: roundText });
+        messages.push({ role: "user", content: "（此前输出被网络中断，请从断点继续剩余部分，不要重复已完成的动作）" });
+        continue;
+      }
+      // 续跑耗尽：保留已产出内容 + 明确中断提示，不再 throw（不整条报废）
+      const notice = "\n\n（连接中断，回复不完整，可让我继续）";
+      answerText += notice;
+      yield { delta: notice };
+      break;
     }
-    const toolCalls = step.value.toolCalls;
-    const usage = step.value.usage;
     const intent = extractIntent(roundText);
     yield { run: { round, maxRounds, intent } };
     if (usage) {
@@ -135,6 +153,27 @@ export async function* streamChat(
   }
 }
 
+/** 模型接口 POST（Task 5）：429/5xx/网络错误退避重试 2 次（间隔 1s、3s）；
+ *  重试耗尽返回最后响应（交调用方报错）或抛网络错误；其余状态码原样返回。 */
+async function fetchModel(url: string, headers: HeadersInit, payload: string): Promise<Response> {
+  const delays = [1000, 3000];
+  let netErr: unknown = null;
+  let res: Response | null = null;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, delays[attempt - 1]));
+    try {
+      res = await fetch(url, { method: "POST", headers, body: payload });
+      netErr = null;
+      if (res.status !== 429 && res.status < 500) return res; // 成功或 4xx（非 429）：不重试
+    } catch (e) {
+      netErr = e;
+      res = null;
+    }
+  }
+  if (res) return res; // 429/5xx 重试耗尽
+  throw netErr instanceof Error ? netErr : new Error(String(netErr));
+}
+
 /** 意图提取：该轮 content 首个非空行、单行化、截 80 字符（供时间线显示“为什么调这个工具”） */
 function extractIntent(text: string): string | undefined {
   const line = text
@@ -158,12 +197,8 @@ async function* streamOnce(
   };
   if (useTools && TOOLS.length) body.tools = TOOLS;
 
-  let res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
-    method: "POST",
-    headers: modelHeaders(s.apiKey),
-    body: JSON.stringify(body),
-  });
-  // 上游不支持 tools 参数时降级：去掉 tools 重试一次
+  let res = await fetchModel(modelEndpoint(s.baseUrl, "chat/completions"), modelHeaders(s.apiKey), JSON.stringify(body));
+  // 上游不支持 tools 参数时降级：去掉 tools 重试一次（不计入退避次数）
   if (!res.ok && useTools && (res.status === 400 || res.status === 422)) {
     delete body.tools;
     res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
