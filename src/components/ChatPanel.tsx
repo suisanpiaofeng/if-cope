@@ -5,14 +5,15 @@ import type { Source } from "@/lib/types";
 import { DND_MIME, readDnd } from "@/lib/dnd";
 import { NOTE_KINDS } from "@/lib/noteKinds";
 import { Markdown } from "./Markdown";
+import { mergeTool, type LiveTool } from "@/lib/agent/timeline";
+import type { TodoItem } from "@/lib/agent/todo";
 
 type Thread = { id: number; title: string; created_at: number; message_count?: number };
 type Message = { role: "user" | "assistant"; content: string; reasoning?: string; citations?: Citation[]; live?: boolean };
 type Citation = { n: number; sourceId: number; title: string; page: number | null; quote: string };
 type PanelView = "home" | "chat" | "all";
 
-/** 工具调用活动（AI 正在操作应用时的实时展示） */
-type LiveTool = { name: string; phase: "run" | "done" | "error"; detail?: string };
+/** 工具调用活动（AI 正在操作应用时的实时展示；合并逻辑在 @/lib/agent/timeline） */
 const TOOL_LABELS: Record<string, string> = {
   list_library: "查看资料库",
   read_source: "读取资料全文",
@@ -21,20 +22,8 @@ const TOOL_LABELS: Record<string, string> = {
   create_category: "新建类目",
   generate_summary: "生成复习笔记",
   web_search: "联网搜索",
+  todo_write: "更新任务清单",
 };
-
-/** 同一工具的 start 后到 done/error 时原位替换，否则追加 */
-function mergeTool(list: LiveTool[], ev: { name: string; phase: "start" | "done" | "error"; detail?: string }): LiveTool[] {
-  const phase = ev.phase === "start" ? "run" : ev.phase;
-  const idx = list.findIndex((t) => t.name === ev.name && t.phase === "run");
-  const item: LiveTool = { name: ev.name, phase, detail: ev.detail };
-  if (ev.phase !== "start" && idx >= 0) {
-    const n = [...list];
-    n[idx] = item;
-    return n;
-  }
-  return [...list, item];
-}
 
 function timeAgo(ts: number) {
   const d = Date.now() - ts;
@@ -90,7 +79,7 @@ export default function ChatPanel({
   const [streaming, setStreaming] = useState(false);
   // 正在运行的任务：即使回到主界面/打开别的会话，流式仍在后台继续
   const [runThread, setRunThread] = useState<number | null>(null);
-  const [live, setLive] = useState<{ question: string; content: string; reasoning: string; citations: Citation[]; tools: LiveTool[] } | null>(null);
+  const [live, setLive] = useState<{ question: string; content: string; reasoning: string; citations: Citation[]; tools: LiveTool[]; plan: TodoItem[]; run?: { round: number; maxRounds: number; intent?: string } } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [citation, setCitation] = useState<{ title: string; page: number | null; chunks: { page: number | null; text: string }[]; quote: string } | null>(null);
@@ -158,7 +147,7 @@ export default function ChatPanel({
     setView("chat");
     setStreaming(true);
     setRunThread(threadId); // 新对话时为 null，与 threadId 一致
-    setLive({ question, content: "", reasoning: "", citations: [], tools: [] });
+    setLive({ question, content: "", reasoning: "", citations: [], tools: [], plan: [] });
     // 开启一段工作：选中状态回归初始（拖入已并入勾选，一并清空）
     onSelectionReset();
     let tid = threadId;
@@ -188,6 +177,8 @@ export default function ChatPanel({
           }
           if (evt.citations) setLive((l) => (l ? { ...l, citations: evt.citations } : l));
           if (evt.tool) setLive((l) => (l ? { ...l, tools: mergeTool(l.tools, evt.tool) } : l));
+          if (evt.plan) setLive((l) => (l ? { ...l, plan: evt.plan.todos } : l));
+          if (evt.run) setLive((l) => (l ? { ...l, run: evt.run } : l));
           if (evt.reasoning) setLive((l) => (l ? { ...l, reasoning: l.reasoning + evt.reasoning } : l));
           if (evt.delta) setLive((l) => (l ? { ...l, content: l.content + evt.delta } : l));
           if (evt.error) setError(evt.error);
@@ -428,15 +419,25 @@ export default function ChatPanel({
                 <p className="mt-1 text-xs leading-5 text-neutral-400">回答基于所选范围的资源，并标注来源页码</p>
               </div>
             )}
-            {/* 工具调用活动：AI 正在操作资料库（移动/生成笔记等） */}
+            {/* 任务面板：人机共写清单（状态/文本可改，写回 agent_todos，下轮模型能感知） */}
+            {liveOpen && live && live.plan.length > 0 && (
+              <TodoPanel
+                todos={live.plan}
+                threadId={threadId}
+                onChange={(todos) => setLive((l) => (l ? { ...l, plan: todos } : l))}
+              />
+            )}
+            {/* 工具调用活动：AI 正在操作资料库（移动/生成笔记等），按轮次+意图展示 */}
             {liveOpen && live && live.tools.length > 0 && (
               <div className="space-y-1 rounded-lg border border-violet-100 bg-violet-50/60 px-3 py-2">
                 {live.tools.map((t, i) => (
-                  <div key={i} className="flex items-start gap-1.5 text-[11px] leading-4 text-violet-700">
+                  <div key={t.callId ?? i} className="flex items-start gap-1.5 text-[11px] leading-4 text-violet-700">
                     <span className="shrink-0">{t.phase === "run" ? "⏳" : t.phase === "done" ? "✅" : "❌"}</span>
                     <span className="min-w-0">
+                      {t.round > 0 ? <span className="text-violet-400">[第{t.round}轮] </span> : null}
                       {TOOL_LABELS[t.name] ?? t.name}
                       {t.phase === "run" ? "…" : ""}
+                      {t.intent ? <span className="text-violet-500"> — {t.intent}</span> : null}
                       {t.detail ? <span className="text-violet-500">：{t.detail}</span> : null}
                       {t.phase === "error" && !t.detail ? "（失败）" : null}
                     </span>
@@ -579,5 +580,114 @@ function CopyBtn({ text }: { text: string }) {
     >
       {copied ? "✓" : "⧉ 复制"}
     </button>
+  );
+}
+
+/** 任务面板（计划 Task 6）：人机共写清单——状态点击循环三态、文本双击编辑、✕ 删除；
+ *  任何改动乐观更新本地 plan 并 PUT /api/agent/todos 写回（下轮模型从表读到的就是改后的）；
+ *  失败回滚并提示。收起态 `☑ n/m` 徽标，点击展开。 */
+function TodoPanel({
+  todos,
+  threadId,
+  onChange,
+}: {
+  todos: TodoItem[];
+  threadId: number | null;
+  onChange: (todos: TodoItem[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  const doneCount = todos.filter((t) => t.status === "completed").length;
+
+  async function commit(next: TodoItem[]) {
+    const prev = todos;
+    onChange(next); // 乐观更新
+    setErr(null);
+    if (!threadId) return;
+    try {
+      const r = await fetch("/api/agent/todos", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId, todos: next }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    } catch {
+      onChange(prev); // 回滚
+      setErr("保存失败，已还原");
+    }
+  }
+
+  function cycle(id: number) {
+    const order: TodoItem["status"][] = ["pending", "in_progress", "completed"];
+    commit(
+      todos.map((t) =>
+        t.id === id ? { ...t, status: order[(order.indexOf(t.status) + 1) % 3] } : t
+      )
+    );
+  }
+
+  function saveEdit() {
+    const text = draft.trim();
+    if (editingId != null && text) {
+      commit(todos.map((t) => (t.id === editingId ? { ...t, text } : t)));
+    }
+    setEditingId(null);
+  }
+
+  const ICONS: Record<TodoItem["status"], string> = { pending: "⬜", in_progress: "🔵", completed: "✅" };
+
+  return (
+    <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 px-3 py-2">
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-2 text-[11px] text-emerald-700">
+        <span>☑ {doneCount}/{todos.length}</span>
+        <span className="text-emerald-500">{open ? "收起任务清单" : "任务清单（点击展开/编辑）"}</span>
+      </button>
+      {err && <div className="mt-1 text-[10px] text-red-500">{err}</div>}
+      {open && (
+        <ul className="mt-2 space-y-1">
+          {todos.map((t) => (
+            <li key={t.id} className="flex items-center gap-1.5 text-[11px] leading-4">
+              <button onClick={() => cycle(t.id)} title="点击切换状态" className="shrink-0">
+                {ICONS[t.status]}
+              </button>
+              {editingId === t.id ? (
+                <input
+                  autoFocus
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={saveEdit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveEdit();
+                    if (e.key === "Escape") setEditingId(null);
+                  }}
+                  className="min-w-0 flex-1 rounded border border-emerald-200 px-1 py-0.5 text-[11px]"
+                />
+              ) : (
+                <span
+                  onDoubleClick={() => {
+                    setEditingId(t.id);
+                    setDraft(t.text);
+                  }}
+                  title="双击编辑"
+                  className={`min-w-0 flex-1 cursor-text truncate ${
+                    t.status === "completed" ? "text-neutral-400 line-through" : "text-neutral-700"
+                  }`}>
+                  {t.text}
+                </span>
+              )}
+              <button
+                onClick={() => commit(todos.filter((x) => x.id !== t.id))}
+                title="删除"
+                className="shrink-0 text-neutral-300 hover:text-red-400">
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
