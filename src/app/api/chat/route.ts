@@ -33,13 +33,37 @@ export async function DELETE(req: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
+/** 产物 → 上下文块（知识地图转问答卡摘要；其他产物整篇截断）。
+ *  不用 [n] 编号——引用规则只覆盖资料片段，产物以【产物】标识供模型区分。 */
+function buildArtifactBlocks(ids: number[]): string[] {
+  if (!ids.length) return [];
+  const rows = db
+    .prepare(`SELECT title, type, content FROM artifacts WHERE id IN (${ids.map(() => "?").join(",")})`)
+    .all(...ids) as Array<{ title: string; type: string; content: string | null }>;
+  return rows.map((a) => {
+    const body = a.content ?? "";
+    if (a.type === "qa-map") {
+      try {
+        const data = JSON.parse(body) as { nodes?: Array<{ title?: string; question?: string; answer?: string }> };
+        const cards = (data.nodes ?? [])
+          .map((n) => `【卡片】${n.title ?? ""}\n问题：${n.question ?? ""}\n回答：${String(n.answer ?? "").slice(0, 600)}`)
+          .join("\n\n");
+        return `【产物·知识地图】《${a.title}》（共 ${(data.nodes ?? []).length} 张问答卡）\n${cards}`;
+      } catch {
+        return `【产物】《${a.title}》（内容损坏，无法解析）`;
+      }
+    }
+    return `【产物】《${a.title}》\n${body.slice(0, 8000)}`;
+  });
+}
+
 export async function POST(req: NextRequest) {
-  const { threadId, sourceIds, question } = (await req.json()) as {
-    threadId?: number; sourceIds: number[]; question: string;
+  const { threadId, sourceIds, question, artifactIds } = (await req.json()) as {
+    threadId?: number; sourceIds: number[]; question: string; artifactIds?: number[];
   };
   if (!question?.trim()) return NextResponse.json({ error: "请输入问题" }, { status: 400 });
-  if (!sourceIds?.length) {
-    return NextResponse.json({ error: "请先勾选要问答的资源" }, { status: 400 });
+  if (!sourceIds?.length && !artifactIds?.length) {
+    return NextResponse.json({ error: "请先勾选要问答的资源或产物" }, { status: 400 });
   }
 
   // 线程：没有就建，标题取首问
@@ -64,6 +88,8 @@ export async function POST(req: NextRequest) {
 
   const hits = await retrieve(question, sourceIds);
   const contextBlocks = buildContextBlocks(hits);
+  // ── 产物上下文（勾选的知识地图/笔记等）：产物不分块，整篇注入（截断） ──
+  const artifactBlocks = buildArtifactBlocks(artifactIds ?? []);
 
   // ── 联网搜索（确定性预搜，不依赖模型主动调工具）：问题带时效性或资料库无命中时
   //    服务端直接搜并注入上下文（与解题页 /api/ask 同策略；web_search 工具仍保留给追问链路）
@@ -82,7 +108,7 @@ export async function POST(req: NextRequest) {
         }
         let full = "";
         let reasoningFull = "";
-        const finalBlocks = webHits.length ? [...contextBlocks, webHitsToContext(webHits)] : contextBlocks;
+        const finalBlocks = [...contextBlocks, ...artifactBlocks, ...(webHits.length ? [webHitsToContext(webHits)] : [])];
         for await (const part of streamChat(question.trim(), finalBlocks, history, sourceIds, tid)) {
           if (part.reasoning) {
             reasoningFull += part.reasoning;

@@ -243,9 +243,12 @@ export default function Workspace() {
       <div className="shrink-0" style={{ width: chatW }}>
         <ChatPanel
           sources={sources}
+          artifacts={artifacts}
           selected={selected}
+          selectedArts={selectedArts}
           onSelectionReset={lib.clearSelection}
           onToggleSource={lib.toggleSelect}
+          onToggleArtifact={lib.toggleSelectArtifact}
           onGenerateNote={handleGenerateNote}
           generatingNote={generatingNote}
           onOrganize={organizeResources}

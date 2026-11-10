@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Source } from "@/lib/types";
+import type { Artifact } from "./FilesPanel";
 import { DND_MIME, readDnd } from "@/lib/dnd";
 import { NOTE_KINDS } from "@/lib/noteKinds";
 import { Markdown } from "./Markdown";
@@ -43,15 +44,21 @@ function mapMsgs(data: { messages?: { role: string; content: string; reasoning?:
 
 /** 最右对话栏：主界面（最近 3 条）↔ 对话视图 ↔ 全部对话；回答进行中回退不中断 */
 export default function ChatPanel({
-  sources, selected, onSelectionReset, onToggleSource, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve,
+  sources, artifacts, selected, selectedArts, onSelectionReset, onToggleSource, onToggleArtifact, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve,
 }: {
   sources: Source[];
+  /** 产物（知识地图/笔记等）：勾选/拖入同样作为问答依据 */
+  artifacts: Artifact[];
   /** 已勾选的资源（来自文件栏复选框） */
   selected: Set<number>;
+  /** 已勾选的产物 */
+  selectedArts: Set<number>;
   /** 发送后重置全部选中 */
   onSelectionReset: () => void;
   /** 勾选/取消勾选一个资源（拖入对话框 = 同步勾选，左侧同步显示） */
   onToggleSource?: (id: number) => void;
+  /** 勾选/取消勾选一个产物（知识地图等同样可作为依据） */
+  onToggleArtifact?: (id: number) => void;
   /** 便签：基于当前上下文生成结构化产物（导图/流程图/闪卡…） */
   onGenerateNote?: (kind: string) => void;
   /** 正在生成的便签类型（null = 空闲） */
@@ -146,7 +153,7 @@ export default function ChatPanel({
   async function ask() {
     const question = input.trim();
     if (!question || streaming) return;
-    if (context.length === 0) { setError(hasFilter ? "所选文件中还没有可检索的资源" : "还没有可检索的资源，先上传并解析成功"); return; }
+    if (context.length === 0 && selectedArts.size === 0) { setError(hasFilter ? "所选文件中还没有可检索的资源" : "还没有可检索的资源，先上传并解析成功"); return; }
     setError(null);
     setInput("");
     setView("chat");
@@ -160,7 +167,7 @@ export default function ChatPanel({
     try {
       const res = await fetch("/api/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId, sourceIds: context.map((s) => s.id), question }),
+        body: JSON.stringify({ threadId, sourceIds: context.map((s) => s.id), artifactIds: [...selectedArts], question }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error ?? "请求失败"); }
       const reader = res.body!.getReader();
@@ -216,20 +223,26 @@ export default function ChatPanel({
       .catch(() => {});
   }, [messages, live]);
 
-  // 拖入对话框 = 同步勾选（左侧资源栏同步打勾，输入框上方胶囊可移除）
+  // 拖入对话框 = 同步勾选（左侧资源栏同步打勾，输入框上方胶囊可移除）；产物同样支持
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDropOver(false);
     const payload = readDnd(e.dataTransfer);
-    if (payload?.kind === "source" && onToggleSource) {
+    if (!payload) return;
+    if (payload.kind === "source" && onToggleSource) {
       for (const id of payload.ids) {
         if (!selected.has(id)) onToggleSource(id);
+      }
+    } else if (payload.kind === "artifact" && onToggleArtifact) {
+      for (const id of payload.ids) {
+        if (!selectedArts.has(id)) onToggleArtifact(id);
       }
     }
   }
 
-  // 对话框上方的上下文胶囊：勾选集（ready 才能参与检索）
+  // 对话框上方的上下文胶囊：勾选集（ready 才能参与检索）+ 产物胶囊
   const contextPills = ready.filter((s) => selected.has(s.id));
+  const artifactPills = artifacts.filter((a) => selectedArts.has(a.id));
 
   // 渲染用消息：进行中的会话追加“用户提问 + 实时回答”覆盖层
   // （服务端在流开始前就存了用户消息，重进会话时已带它，这里按内容去重）
@@ -306,7 +319,7 @@ export default function ChatPanel({
         {/* 上下文胶囊：勾选/拖入的文件逐个显示（× 移除；空 = 全部资源）；右侧模型徽章 */}
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {hasFilter ? (
+            {hasFilter || artifactPills.length > 0 ? (
               <>
                 {contextPills.map((s) => (
                   <span key={s.id}
@@ -315,7 +328,18 @@ export default function ChatPanel({
                     <button onClick={() => onToggleSource?.(s.id)} className="shrink-0 text-violet-400 hover:text-violet-700" title="移出（同步取消左侧勾选）">×</button>
                   </span>
                 ))}
-                <span className="num shrink-0 text-[10px] text-neutral-400">依据 {context.length} 份 · {totalChunks} 块</span>
+                {artifactPills.map((a) => (
+                  <span key={`a${a.id}`}
+                    className="flex max-w-[160px] items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+                    <span className="truncate" title={a.title}>{a.type === "qa-map" ? "🗺 " : "📝 "}{a.title}</span>
+                    <button onClick={() => onToggleArtifact?.(a.id)} className="shrink-0 text-emerald-400 hover:text-emerald-700" title="移出（同步取消左侧勾选）">×</button>
+                  </span>
+                ))}
+                {hasFilter ? (
+                  <span className="num shrink-0 text-[10px] text-neutral-400">依据 {context.length} 份 · {totalChunks} 块</span>
+                ) : (
+                  <span className="shrink-0 text-[10px] text-neutral-400">未选资源 → 检索全部 + 上述产物</span>
+                )}
               </>
             ) : (
               <span className="text-[11px] text-neutral-400">未选资源 → 检索全部（拖文件进来 = 指定依据）</span>
