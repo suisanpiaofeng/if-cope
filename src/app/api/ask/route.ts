@@ -8,6 +8,7 @@ import db, { getSettings, isModelConfigured, recordUsage } from "@/lib/db";
 import { retrieve, buildContextBlocks } from "@/lib/retrieval";
 import { estimateTokens } from "@/lib/embed";
 import { modelEndpoint, modelHeaders } from "@/lib/modelGateway";
+import { resolvePrompt, PROMPT_DEFAULTS } from "@/lib/prompts";
 import {
   ancestorChain,
   nextNodePosition,
@@ -20,25 +21,8 @@ import { webSearch, webHitsToContext, type WebHit } from "@/lib/webSearch";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const SYSTEM = `你是解题答疑助手，正在和学生进行多轮对话式学习。要求：
-- 用 markdown 回答，先给结论再展开；分点清晰，公式用行内代码或 LaTeX 风格写
-- 引用规则（严格遵守）：只有「资料片段」确实支撑了某个论断时，才在该论断后标注 [n]（n 为资料编号）；
-  若资料与问题无关、或不足以支撑，就按通用知识干干净净地回答，**一个 [n] 都不要标**（宁缺毋滥，绝不挂无关引用）
-- 若提供了「网络检索结果」：可参考其内容并直接给出链接（markdown 链接），网络来源不使用 [n] 标注；
-  网络内容可能有时效性，涉及时间敏感的信息要注明“以官方最新信息为准”
-- 这是地图上的一个节点：回答自成一体（读者可能只看这张卡），同时承接对话历史的脉络
-- 长度适中（200-400 字为宜），突出学生能带走的结论`;
 
-const ROUTER_SYSTEM = `你是知识地图的路由判断器。给定学生的新问题和地图里已有的卡片，判断新问题属于哪种：
-- 对某张卡片的追问/直接相关延伸 → 返回那张卡片的 id
-- 全新的独立话题 → 返回 null
-只输出 JSON：{"parentId":"卡片id或null"}，不要输出其他文字。判断依据是问题内容的语义关联，选最相关的一张；拿不准就 null。`;
 
-const REL_SYSTEM = `你是知识地图的关系标注器。给定相连的两张问答卡片，分别总结两个方向的关系词：
-- parentEnd：子卡相对父卡的关系（如：追问延伸、深入拆解、案例验证、对比辨析、应用实践、纠错反思）
-- childEnd：父卡相对子卡的关系（如：上文依据、背景来源、概念出处、前情结论、方法出处）
-要求：2-6 个字的中文词，基于两问语义给出比“追问”更具体的词；拿不准时才用通用词。
-只输出 JSON：{"parentEnd":"...","childEnd":"..."}`;
 
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as {
@@ -136,7 +120,7 @@ export async function POST(req: NextRequest) {
         headers: modelHeaders(s.apiKey),
         body: JSON.stringify({
           model: s.chatModel,
-          messages: [{ role: "system", content: SYSTEM }, ...history, { role: "user", content: userContent }],
+          messages: [{ role: "system", content: resolvePrompt("ask_system", PROMPT_DEFAULTS.ask_system) }, ...history, { role: "user", content: userContent }],
           temperature: 0.3,
         }),
       });
@@ -223,7 +207,7 @@ async function decideParent(question: string, nodes: QaMapNode[]): Promise<strin
       body: JSON.stringify({
         model: s.chatModel,
         messages: [
-          { role: "system", content: ROUTER_SYSTEM },
+          { role: "system", content: resolvePrompt("map_router", PROMPT_DEFAULTS.map_router) },
           { role: "user", content: `新问题：${question}\n\n已有卡片：\n${list}` },
         ],
         temperature: 0,
@@ -262,7 +246,7 @@ async function describeRelation(
       body: JSON.stringify({
         model: s.chatModel,
         messages: [
-          { role: "system", content: REL_SYSTEM },
+          { role: "system", content: resolvePrompt("map_rel", PROMPT_DEFAULTS.map_rel) },
           { role: "user", content: `父卡问题：${parentQ.slice(0, 120)}\n子卡问题：${childQ.slice(0, 120)}` },
         ],
         temperature: 0,

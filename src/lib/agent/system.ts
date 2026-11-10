@@ -1,6 +1,7 @@
 import db from "@/lib/db";
 import { TOOLS } from "./tools";
 import type { TodoItem } from "./todo";
+import { resolvePrompt } from "../prompts";
 
 /** 环境自知的系统提示词：告诉模型"你运行在哪、这个应用是什么、有哪些模块"，
  *  并注入实时资料库状态（类目/资料/产物 + 本次对话选中的资料）。
@@ -65,7 +66,7 @@ ${todos.length ? todos.map((t) => `- [${t.status}] ${t.id}. ${t.text}`).join("\n
 </current_todos>
 
 ## 当前资料库实时状态
-${buildLibraryState(selectedSourceIds)}`;
+${buildLibraryState(selectedSourceIds)}${resolvePrompt("chat_append", "") ? `\n\n<user_instructions>\n${resolvePrompt("chat_append", "")}\n</user_instructions>` : ""}`;
 }
 
 function listToolsText(): string {

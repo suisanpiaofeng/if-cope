@@ -1,10 +1,8 @@
 import db, { getSettings, isModelConfigured, recordUsage } from "./db";
 import { estimateTokens } from "./embed";
 import { modelEndpoint, modelHeaders } from "./modelGateway";
+import { resolvePrompt, PROMPT_DEFAULTS } from "./prompts";
 
-const SYSTEM = `你是学习资料整理助手。根据提供的资料片段生成结构化中文复习笔记，输出 markdown：
-# 标题、## 一、概述、## 二、核心要点（分条）、## 三、术语表（表格）、## 四、可能的考点。
-只使用资料里出现的内容，不要编造。`;
 
 /** 从选中资源取块拼上下文（供复习笔记 / 便签引擎共用） */
 export function gatherContext(sourceIds: number[]): {
@@ -53,7 +51,7 @@ export async function generateSummary(sourceIds: number[]): Promise<{
     body: JSON.stringify({
       model: s.chatModel,
       messages: [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: resolvePrompt("artifact_summary", PROMPT_DEFAULTS.artifact_summary) },
         { role: "user", content: `资料片段：\n${context}\n\n请生成复习笔记。` },
       ],
     }),
