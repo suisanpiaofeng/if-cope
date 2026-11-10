@@ -74,9 +74,58 @@ CREATE TABLE IF NOT EXISTS usage_ledger (
 );
 `);
 
-/* ── 课堂专区 v2（规格 docs/课堂专区-架构规格-v2-20261028.md §3）──
- * 多用户就绪：所有表带 user_id（本地 demo 恒为默认用户）；笔记/手册重生成幂等（UNIQUE 单行） */
-/* 课堂专区的 classroom_* 表已随功能移除（2026-10-30，等待重新构思）；旧库中的同名表保留不影响。 */
+/* ── 课堂专区 v3（规格 docs/superpowers/specs/2026-11-09-classroom-native-ui-design.md §4）──
+ * 多用户就绪：所有表带 user_id（本地 demo 恒为默认用户，D6 沿用）；
+ * 旧 classroom_* 表（cvs_course_id 旧列）已在 2026-10-30 清空弃用；若仍存在且为空则删除重建。 */
+const DEFAULT_USER = "local";
+export { DEFAULT_USER };
+for (const t of ["classroom_courses", "classroom_lessons", "classroom_notes", "classroom_digests"]) {
+  // 并行构建的多个 worker 同时加载本模块，查存在→删表存在 TOCTOU 竞态：
+  // A 查到表在、B 先删了，A 的 COUNT 会抛 no such table；整体 try/catch 容忍（删成功即目的达成）
+  try {
+    const has = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t) as
+      | { name: string }
+      | undefined;
+    if (!has) continue;
+    const { c } = db.prepare(`SELECT COUNT(*) c FROM ${t}`).get() as { c: number };
+    if (c === 0) db.exec(`DROP TABLE IF EXISTS ${t}`);
+  } catch {
+    /* 并发迁移中表已消失，忽略 */
+  }
+}
+db.exec(`
+CREATE TABLE IF NOT EXISTS classroom_courses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  tecl_id TEXT NOT NULL,
+  subj_id TEXT,
+  subj_name TEXT NOT NULL,
+  tecl_name TEXT,
+  tecl_code TEXT,
+  term TEXT,
+  teac_names TEXT NOT NULL DEFAULT '[]',
+  cover_url TEXT,
+  meta_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(user_id, tecl_id)
+);
+CREATE TABLE IF NOT EXISTS classroom_lessons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  course_id INTEGER NOT NULL REFERENCES classroom_courses(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL,
+  cour_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  begin_time TEXT,
+  vod_status INTEGER,
+  duration_sec INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(course_id, cour_id)
+);
+CREATE INDEX IF NOT EXISTS idx_classroom_lessons_course ON classroom_lessons(course_id, seq);
+`);
 
 /* ── 索引 2.0：结构感知分块 + 混合检索（FTS5 关键词 + 向量，参考 Khoj/Quivr/LangChain） ──
  * heading 列：旧库迁移；chunks_fts：trigram 中文全文索引（external content + 触发器自动同步，
