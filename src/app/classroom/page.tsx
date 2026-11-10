@@ -2,7 +2,8 @@
 
 /**
  * 课堂专区（v3，规格 docs/superpowers/specs/2026-11-09-classroom-native-ui-design.md）：
- * 原生 UI——课程列表/搜索/课时/机位播放。不再内嵌 iframe（§7 已整体移除）。
+ * 原生 UI——三栏布局：左栏已添加课程（搜索为弹窗添加）、中栏课时窄栏（选中课程后出现）、右栏机位播放。
+ * 不再内嵌 iframe（§7 已整体移除）。
  * 分工（§3）：需要官方会话的请求由本页经反代 3778 发起（Cookie 浏览器托管）；
  * 拿到结果提交 3777 落库；本地列表/课时从 3777 读缓存。
  */
@@ -54,12 +55,6 @@ export default function ClassroomPage() {
   const [proxyRunning, setProxyRunning] = useState<boolean | null>(null);
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
   const [courses, setCourses] = useState<ClassroomCourse[]>([]);
-  const [q, setQ] = useState(""); // 远程搜索词（空=显示已添加课程）
-  const [searchResults, setSearchResults] = useState<CvsCourseItem[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searchErr, setSearchErr] = useState<string | null>(null);
-  const [searchPage, setSearchPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
   const [activeCourse, setActiveCourse] = useState<ClassroomCourse | null>(null);
   const [lessons, setLessons] = useState<ClassroomLesson[]>([]);
   const [playing, setPlaying] = useState<Playing | null>(null);
@@ -68,6 +63,8 @@ export default function ClassroomPage() {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [cookieOpen, setCookieOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [deleting, setDeleting] = useState<ClassroomCourse | null>(null);
 
   // 同意状态（存版本号：声明更新可重新拦截）
   useEffect(() => {
@@ -114,74 +111,9 @@ export default function ClassroomPage() {
     if (agreed) loadCourses();
   }, [agreed, loadCourses]);
 
-  /** 远程搜索：官方「我的课程」页同一接口+condition（全校课程，搜到自己那门点 + 添加）。
-   *  防抖 400ms；失败显式提示，不清已添加列表。 */
-  useEffect(() => {
-    const kw = q.trim();
-    if (!kw) {
-      setSearchResults([]);
-      setSearchErr(null);
-      setSearching(false);
-      setSearchPage(1);
-      setHasMore(false);
-      return;
-    }
-    let stop = false;
-    setSearching(true);
-    setSearchErr(null);
-    setSearchPage(1);
-    const t = setTimeout(() => {
-      proxyFetch(
-        `${CVS_API_BASE}/teachingclass/list?pageIndex=1&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
-      )
-        .then((json) => {
-          if (stop) return;
-          const items = sortNewest(extractListItems(json) as CvsCourseItem[]);
-          setSearchResults(items);
-          setHasMore(items.length >= 100);
-        })
-        .catch((e) => {
-          if (!stop) setSearchErr(e instanceof Error ? e.message : String(e));
-        })
-        .finally(() => {
-          if (!stop) setSearching(false);
-        });
-    }, 400);
-    return () => {
-      stop = true;
-      clearTimeout(t);
-    };
-  }, [q]);
-
-  /** 加载更多：搜索翻页追加（同名班跨多年份时首页可能被老班挤满） */
-  async function loadMoreSearch() {
-    const kw = q.trim();
-    const page = searchPage + 1;
-    setBusy("加载更多");
-    setSearchErr(null);
-    try {
-      const json = await proxyFetch(
-        `${CVS_API_BASE}/teachingclass/list?pageIndex=${page}&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
-      );
-      const items = extractListItems(json) as CvsCourseItem[];
-      setSearchResults((prev) => {
-        const seen = new Set(prev.map((it) => String(it.id ?? "")));
-        return sortNewest([...prev, ...items.filter((it) => !seen.has(String(it.id ?? "")))]);
-      });
-      setSearchPage(page);
-      setHasMore(items.length >= 100);
-    } catch (e) {
-      setSearchErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  /** 单门添加：搜索结果一条 → 提交 3777 落库（白名单字段在 store 层）→ 进已添加列表 */
-  async function addCourse(item: CvsCourseItem) {
-    setBusy("添加课程");
-    setError(null);
-    setMsg(null);
+  /** 单门添加：搜索结果一条 → 提交 3777 落库（白名单字段在 store 层）→ 进已添加列表。
+   *  返回错误信息（null=成功），由搜索弹窗内联呈现。 */
+  async function addCourse(item: CvsCourseItem): Promise<string | null> {
     try {
       const r = await fetch("/api/classroom/courses/sync", {
         method: "POST",
@@ -191,20 +123,44 @@ export default function ClassroomPage() {
       const d = await r.json();
       if (!r.ok || d.error) throw new Error(d.error ?? `落库失败 HTTP ${r.status}`);
       await loadCourses();
-      setMsg({ kind: "ok", text: `已添加：${String(item.subjName || item.teclName || "")}` });
+      return null;
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
-      setError(`添加课程失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境；若持续失败可重新点「登录 CVS」刷新凭据。`);
-    } finally {
-      setBusy(null);
+      return `添加课程失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境；若持续失败可重新点「登录 CVS」刷新凭据。`;
     }
   }
 
-  /** 进入课程：读本地课时缓存 */
+  /** 删除已添加课程：连同课时缓存一并删除（后端 ON DELETE CASCADE） */
+  async function removeCourse(c: ClassroomCourse) {
+    setBusy("删除课程");
+    setError(null);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/classroom/courses/${c.id}`, { method: "DELETE" });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error ?? `删除失败 HTTP ${r.status}`);
+      if (activeCourse?.id === c.id) {
+        setActiveCourse(null);
+        setLessons([]);
+      }
+      if (playing && playing.lesson.course_id === c.id) {
+        setPlaying(null);
+        setPlayError(false);
+      }
+      await loadCourses();
+      setMsg({ kind: "ok", text: `已删除：${c.subj_name}` });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      setError(`删除课程失败：${m}`);
+    } finally {
+      setBusy(null);
+      setDeleting(null);
+    }
+  }
+
+  /** 进入课程：读本地课时缓存（课时出现在中栏窄栏） */
   async function openCourse(course: ClassroomCourse) {
     setActiveCourse(course);
-    setPlaying(null);
-    setPlayError(false);
     setError(null);
     try {
       const r = await fetch(`/api/classroom/courses/${course.id}/lessons`);
@@ -269,7 +225,7 @@ export default function ClassroomPage() {
     }
   }
 
-  /** 点课时：实时取流（直链不落库），空机位显式报错 */
+  /** 点课时：实时取流（直链不落库），空机位显式报错；播放器常驻右栏 */
   async function playLesson(lesson: ClassroomLesson) {
     setBusy("取流中");
     setError(null);
@@ -282,7 +238,7 @@ export default function ClassroomPage() {
       setPlayError(false);
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
-      setError(`打开播放失败：${m}。可稍后重试或刷新课时。`);
+      setError(`打开播放失败：${m}。可稍后重试或刷新课时；若持续失败可重新点「登录 CVS」刷新凭据。`);
     } finally {
       setBusy(null);
     }
@@ -353,139 +309,142 @@ export default function ClassroomPage() {
         )}
 
         <div className="flex min-h-0 flex-1">
-          {/* 左栏：搜索 + 课程卡片 */}
-          <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-200">
-            <div className="border-b border-neutral-100 p-3">
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="搜索课程名（如：高等数学）"
-                className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-[12px] outline-none focus:border-neutral-400"
-              />
+          {/* 左栏：已添加课程（搜索为弹窗） */}
+          <aside className="flex w-64 shrink-0 flex-col border-r border-neutral-200">
+            <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2.5">
+              <span className="text-[12px] font-semibold text-neutral-700">我的课程</span>
+              <button
+                onClick={() => setSearchOpen(true)}
+                className="rounded-md border border-neutral-300 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50">
+                ＋ 添加
+              </button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              {q.trim() ? (
-                /* ── 远程搜索结果（全校课程；搜到自己那门点 + 添加） ── */
-                searching ? (
-                  <div className="mt-6 text-center text-[12px] text-neutral-400">搜索中…（官方接口约 2-6 秒）</div>
-                ) : searchResults.length > 0 ? (
-                  <div className="flex flex-col gap-2">
-                    {searchResults.map((it) => {
-                      const teclId = String(it.id ?? "");
-                      const added = courses.some((c) => c.tecl_id === teclId);
-                      const name = String(it.subjName || it.teclName || "");
-                      return (
-                        <div key={teclId} className="flex items-start gap-2 rounded-lg border border-neutral-200 p-2.5">
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-[12.5px] font-medium text-neutral-800" title={name}>
-                              {name}
-                            </div>
-                            <div className="truncate text-[10.5px] text-neutral-500">
-                              {String(it.teclName || "")}
-                              {it.teclCode ? ` (${String(it.teclCode)})` : ""}
-                            </div>
-                            <div className="truncate text-[10.5px] text-neutral-400">
-                              {itemTeachers(it)}
-                              {termFromTeclCode(String(it.teclCode ?? ""))
-                                ? ` · ${termFromTeclCode(String(it.teclCode ?? ""))}`
-                                : ""}
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => addCourse(it)}
-                            disabled={added || busy !== null}
-                            className={`shrink-0 rounded-md border px-2.5 py-1 text-[11px] ${
-                              added
-                                ? "border-emerald-200 bg-emerald-50 text-emerald-600"
-                                : "border-neutral-300 text-neutral-600 hover:bg-neutral-50"
-                            } disabled:opacity-60`}>
-                            {added ? "✓ 已添加" : "+ 添加"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                    {hasMore && (
-                      <button
-                        onClick={loadMoreSearch}
-                        disabled={busy !== null}
-                        className="rounded-lg border border-dashed border-neutral-300 py-2 text-[11.5px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
-                        {busy === "加载更多" ? "加载中…" : "加载更多（同名班跨多年份时首页可能被老班占满）"}
-                      </button>
-                    )}
-                    {searchErr && (
-                      <div className="rounded border border-red-200 bg-red-50 p-2 text-[11px] text-red-700">
-                        加载更多失败：{searchErr}
-                      </div>
-                    )}
-                  </div>
-                ) : searchErr ? (
-                  <div className="mt-4 rounded border border-red-200 bg-red-50 p-2.5 text-[11.5px] leading-5 text-red-700">
-                    搜索失败：{searchErr}
-                    <br />
-                    请确认已登录 CVS 且在校内网/VPN 环境
-                  </div>
-                ) : (
-                  <div className="mt-6 text-center text-[12px] text-neutral-400">没有匹配的课程</div>
-                )
-              ) : courses.length === 0 ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+              {courses.length === 0 ? (
                 <div className="mt-8 text-center text-[12px] leading-6 text-neutral-400">
                   还没有已添加的课程
                   <br />
-                  先「登录 CVS」，再在上方搜索课程名
+                  先「登录 CVS」，再点右上「＋ 添加」搜索
                 </div>
               ) : (
-                <div className="flex flex-col gap-2.5">
+                <div className="flex flex-col gap-2">
                   {courses.map((c) => (
-                    <button
+                    <div
                       key={c.id}
-                      onClick={() => openCourse(c)}
-                      className={`rounded-lg border p-3 text-left transition ${
+                      className={`group relative rounded-lg border p-2.5 transition ${
                         activeCourse?.id === c.id
                           ? "border-neutral-900 bg-neutral-50"
                           : "border-neutral-200 hover:border-neutral-300"
                       }`}>
-                      <div className="flex gap-3">
+                      <button onClick={() => openCourse(c)} className="flex w-full gap-2 text-left">
                         {c.cover_url ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
                             src={c.cover_url}
                             alt=""
-                            className="h-14 w-20 shrink-0 rounded object-cover bg-neutral-100"
+                            className="h-11 w-16 shrink-0 rounded object-cover bg-neutral-100"
                           />
                         ) : (
-                          <div className="flex h-14 w-20 shrink-0 items-center justify-center rounded bg-neutral-100 text-[16px]">
+                          <div className="flex h-11 w-16 shrink-0 items-center justify-center rounded bg-neutral-100 text-[14px]">
                             📚
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-[13px] font-medium text-neutral-800" title={c.subj_name}>
+                          <div className="truncate pr-5 text-[12.5px] font-medium text-neutral-800" title={c.subj_name}>
                             {c.subj_name}
                           </div>
-                          <div className="truncate text-[11px] text-neutral-500" title={`${c.tecl_name}(${c.tecl_code})`}>
+                          <div className="truncate text-[10.5px] text-neutral-500" title={`${c.tecl_name}(${c.tecl_code})`}>
                             {c.tecl_name}
                             {c.tecl_code ? ` (${c.tecl_code})` : ""}
                           </div>
-                          <div className="truncate text-[11px] text-neutral-400">
+                          <div className="truncate text-[10.5px] text-neutral-400">
                             {safeTeachers(c.teac_names)} · {c.term}
                           </div>
+                          <div className="mt-0.5 text-[10px] text-neutral-400">{c.lesson_count} 讲已缓存</div>
                         </div>
-                      </div>
-                      <div className="mt-1.5 text-[10.5px] text-neutral-400">{c.lesson_count} 讲已缓存</div>
-                    </button>
+                      </button>
+                      {/* 删除课程（含课时缓存，二次确认） */}
+                      <button
+                        onClick={() => setDeleting(c)}
+                        title="删除课程（含课时缓存）"
+                        className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded text-[11px] text-neutral-300 opacity-60 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100">
+                        ✕
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
             </div>
           </aside>
 
-          {/* 右主区 */}
+          {/* 中栏：课时窄栏（选中课程后才出现） */}
+          {activeCourse && (
+            <aside className="flex w-56 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50/50">
+              <div className="border-b border-neutral-100 px-3 py-2">
+                <div className="truncate text-[12px] font-semibold text-neutral-800" title={activeCourse.subj_name}>
+                  {activeCourse.subj_name}
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="truncate text-[10px] text-neutral-400">{lessons.length} 讲</span>
+                  <button
+                    onClick={refreshLessons}
+                    disabled={busy !== null}
+                    className="shrink-0 rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
+                    {busy === "刷新课时" ? "刷新中…" : "⟳ 刷新"}
+                  </button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+                {lessons.length === 0 ? (
+                  <div className="mt-6 px-2 text-center text-[11px] leading-5 text-neutral-400">
+                    本课还没有缓存课时
+                    <br />
+                    点上方「⟳ 刷新」拉取
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {lessons.map((l) => {
+                      const playable = l.vod_status === 5;
+                      const isPlaying = playing?.lesson.id === l.id;
+                      return (
+                        <button
+                          key={l.id}
+                          onClick={() => playable && playLesson(l)}
+                          disabled={!playable || busy !== null}
+                          title={l.title}
+                          className={`rounded-md px-2.5 py-1.5 text-left transition ${
+                            isPlaying
+                              ? "bg-neutral-900 text-white"
+                              : playable
+                                ? "hover:bg-neutral-100"
+                                : "cursor-not-allowed opacity-50"
+                          }`}>
+                          <div className={`truncate text-[11.5px] ${isPlaying ? "text-white" : "text-neutral-700"}`}>
+                            {l.title}
+                          </div>
+                          <div className={`text-[10px] ${isPlaying ? "text-neutral-300" : "text-neutral-400"}`}>
+                            {!playable
+                              ? l.vod_status === -3
+                                ? "转码中"
+                                : "不可播"
+                              : l.begin_time.slice(11, 16)}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </aside>
+          )}
+
+          {/* 右栏：播放器 / 占位 */}
           <section className="flex min-w-0 flex-1 flex-col">
             {playing ? (
-              /* ── 播放态 ── */
               <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-2">
+                <div className="flex items-center justify-between gap-3 border-b border-neutral-100 px-4 py-2">
                   <div className="min-w-0 truncate text-[13px] font-medium">{playing.lesson.title}</div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex shrink-0 items-center gap-1.5">
                     {playing.views.map((v, i) => (
                       <button
                         key={`${v.viewNum}-${i}`}
@@ -498,32 +457,20 @@ export default function ClassroomPage() {
                         {CVS_VIEW_NAMES[v.viewNum] ?? `机位${v.viewNum}`}
                       </button>
                     ))}
-                    <button
-                      onClick={() => setPlaying(null)}
-                      className="ml-1 rounded border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50">
-                      ← 返回列表
-                    </button>
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 bg-black">
                   {playError ? (
                     <div className="flex h-full flex-col items-center justify-center gap-3 text-[13px] text-neutral-300">
                       <div>播放失败（直链与代理均已尝试）。可切换机位或稍后重试。</div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => {
-                            setPlayError(false);
-                            setPlaying({ ...playing, viaProxy: false });
-                          }}
-                          className="rounded-md border border-neutral-600 px-3 py-1.5 text-[12px] hover:bg-neutral-800">
-                          重试
-                        </button>
-                        <button
-                          onClick={() => setPlaying(null)}
-                          className="rounded-md border border-neutral-600 px-3 py-1.5 text-[12px] hover:bg-neutral-800">
-                          回列表
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => {
+                          setPlayError(false);
+                          setPlaying({ ...playing, viaProxy: false });
+                        }}
+                        className="rounded-md border border-neutral-600 px-3 py-1.5 text-[12px] hover:bg-neutral-800">
+                        重试
+                      </button>
                     </div>
                   ) : (
                     /* key 强制按课时/机位/通道切换重挂载；直链失败自动切反代代理兜底一次（规格 §3） */
@@ -541,82 +488,16 @@ export default function ClassroomPage() {
                   )}
                 </div>
               </div>
-            ) : activeCourse ? (
-              /* ── 课程态：课时表 ── */
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-[13px] font-semibold">{activeCourse.subj_name}</div>
-                    <div className="truncate text-[11px] text-neutral-400">
-                      {activeCourse.tecl_name} · {safeTeachers(activeCourse.teac_names)}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setActiveCourse(null);
-                        setLessons([]);
-                      }}
-                      className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50">
-                      ← 课程
-                    </button>
-                    <button
-                      onClick={refreshLessons}
-                      disabled={busy !== null}
-                      className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
-                      {busy === "刷新课时" ? "刷新中…" : "⟳ 刷新课时"}
-                    </button>
-                  </div>
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-4">
-                  {lessons.length === 0 ? (
-                    <div className="mt-8 text-center text-[12px] leading-6 text-neutral-400">
-                      本课还没有缓存课时
-                      <br />
-                      点右上「刷新课时」从官方平台拉取（需已登录 + 校内网/VPN）
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-1.5">
-                      {lessons.map((l) => {
-                        const playable = l.vod_status === 5;
-                        return (
-                          <button
-                            key={l.id}
-                            onClick={() => playable && playLesson(l)}
-                            disabled={!playable || busy !== null}
-                            className={`flex items-center justify-between rounded-lg border px-4 py-2.5 text-left ${
-                              playable
-                                ? "border-neutral-200 hover:border-neutral-400 hover:bg-neutral-50"
-                                : "cursor-not-allowed border-neutral-100 bg-neutral-50 opacity-60"
-                            }`}>
-                            <div className="min-w-0">
-                              <div className={`truncate text-[13px] ${playable ? "text-neutral-800" : "text-neutral-400"}`}>
-                                {l.title}
-                              </div>
-                              <div className="text-[11px] text-neutral-400">{l.begin_time}</div>
-                            </div>
-                            {!playable ? (
-                              <span className="shrink-0 rounded bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-400">
-                                {l.vod_status === -3 ? "转码中" : "不可播"}
-                              </span>
-                            ) : (
-                              <span className="shrink-0 text-[13px] text-neutral-300">▶</span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
             ) : (
-              /* ── 空态 ── */
+              /* ── 占位 ── */
               <div className="flex min-h-0 flex-1 items-center justify-center text-center text-[12.5px] leading-6 text-neutral-400">
-                {courses.length === 0 ? (
+                {activeCourse ? (
+                  <>← 在课时列表中选择一节课开始播放</>
+                ) : courses.length === 0 ? (
                   <>
                     从左侧开始：
                     <br />
-                    「登录 CVS」→ 搜索课程名 → 点「+ 添加」→ 选课 → 刷课时 → 看回放
+                    「登录 CVS」→「＋ 添加」搜索课程 → 选课 → 刷课时 → 看回放
                   </>
                 ) : (
                   <>← 选择一门课程</>
@@ -626,6 +507,24 @@ export default function ClassroomPage() {
           </section>
         </div>
       </main>
+
+      {searchOpen && (
+        <SearchCourseDialog
+          addedIds={new Set(courses.map((c) => c.tecl_id))}
+          busy={busy}
+          onAdd={addCourse}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
+
+      {deleting && (
+        <ConfirmDeleteDialog
+          course={deleting}
+          busy={busy === "删除课程"}
+          onCancel={() => setDeleting(null)}
+          onConfirm={() => removeCourse(deleting)}
+        />
+      )}
 
       {cookieOpen && (
         <CookieDialog
@@ -650,10 +549,20 @@ export default function ClassroomPage() {
   );
 }
 
-/** 按 teclCode 降序：班号前缀就是学期码（202620272B… = 2026-2027学年第2学期），新学期排前 */
-function sortNewest(items: CvsCourseItem[]): CvsCourseItem[] {
-  return [...items].sort((a, b) =>
-    String(b.teclCode ?? "").localeCompare(String(a.teclCode ?? ""))
+/** 当前学年学期码前缀：8 月（含）后为「当年-次年」，否则「去年-当年」（如 2026-11 → 20262027） */
+function currentAcYearPrefix(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const start = d.getMonth() + 1 >= 8 ? y : y - 1;
+  return `${start}${start + 1}`;
+}
+
+/** 搜索结果排序：当前学年排最前，其余按学期码降序（新学期在前） */
+function sortCurrentFirst(items: CvsCourseItem[]): CvsCourseItem[] {
+  const prefix = currentAcYearPrefix();
+  const rank = (it: CvsCourseItem) => (String(it.teclCode ?? "").startsWith(prefix) ? 0 : 1);
+  return [...items].sort(
+    (a, b) => rank(a) - rank(b) || String(b.teclCode ?? "").localeCompare(String(a.teclCode ?? ""))
   );
 }
 
@@ -680,6 +589,222 @@ function safeTeachers(json: string): string {
   } catch {
     return json;
   }
+}
+
+/** 搜索添加课程弹窗：官方「我的课程」页同一接口+condition（全校课程）。
+ *  防抖 400ms；排序当前学年优先；点「＋ 添加」入库（错误内联显示）。 */
+function SearchCourseDialog({
+  addedIds,
+  busy,
+  onAdd,
+  onClose,
+}: {
+  addedIds: Set<string>;
+  busy: string | null;
+  onAdd: (item: CvsCourseItem) => Promise<string | null>;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<CvsCourseItem[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [searchPage, setSearchPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [addingId, setAddingId] = useState<string | null>(null);
+
+  /** 远程搜索（防抖 400ms；失败显式提示） */
+  useEffect(() => {
+    const kw = q.trim();
+    if (!kw) {
+      setResults([]);
+      setErr(null);
+      setSearching(false);
+      setSearchPage(1);
+      setHasMore(false);
+      return;
+    }
+    let stop = false;
+    setSearching(true);
+    setErr(null);
+    setSearchPage(1);
+    const t = setTimeout(() => {
+      proxyFetch(
+        `${CVS_API_BASE}/teachingclass/list?pageIndex=1&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
+      )
+        .then((json) => {
+          if (stop) return;
+          const items = sortCurrentFirst(extractListItems(json) as CvsCourseItem[]);
+          setResults(items);
+          setHasMore(items.length >= 100);
+        })
+        .catch((e) => {
+          if (!stop) setErr(e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => {
+          if (!stop) setSearching(false);
+        });
+    }, 400);
+    return () => {
+      stop = true;
+      clearTimeout(t);
+    };
+  }, [q]);
+
+  /** 加载更多：搜索翻页追加（同名班跨多年份时首页可能被老班挤满） */
+  async function loadMore() {
+    const kw = q.trim();
+    const page = searchPage + 1;
+    setLoadingMore(true);
+    setErr(null);
+    try {
+      const json = await proxyFetch(
+        `${CVS_API_BASE}/teachingclass/list?pageIndex=${page}&pageSize=100&type=4&allType=1&condition=${encodeURIComponent(kw)}`
+      );
+      const items = extractListItems(json) as CvsCourseItem[];
+      setResults((prev) => {
+        const seen = new Set(prev.map((it) => String(it.id ?? "")));
+        return sortCurrentFirst([...prev, ...items.filter((it) => !seen.has(String(it.id ?? "")))]);
+      });
+      setSearchPage(page);
+      setHasMore(items.length >= 100);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  async function add(item: CvsCourseItem) {
+    const teclId = String(item.id ?? "");
+    setAddingId(teclId);
+    setErr(null);
+    const e = await onAdd(item);
+    if (e) setErr(e);
+    setAddingId(null);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30" onClick={onClose}>
+      <div
+        className="mt-20 flex max-h-[70vh] w-[640px] max-w-full flex-col rounded-xl bg-white p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold">搜索添加课程</h3>
+          <button onClick={onClose} className="text-neutral-400 hover:text-neutral-600">
+            ✕
+          </button>
+        </div>
+        <p className="mt-1 text-[11px] leading-5 text-neutral-500">
+          搜索全校课程（当前学年的排最前），找到自己那门点「＋ 添加」。需已登录 CVS 且在校内网/VPN 环境。
+        </p>
+        <input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="搜索课程名（如：高等数学）"
+          className="mt-3 w-full rounded-lg border border-neutral-200 px-3 py-2 text-[12.5px] outline-none focus:border-neutral-400"
+        />
+        {err && (
+          <div className="mt-3 rounded border border-red-200 bg-red-50 p-2 text-[11px] leading-5 text-red-700">{err}</div>
+        )}
+        <div className="mt-3 min-h-0 flex-1 overflow-y-auto">
+          {!q.trim() ? (
+            <div className="py-10 text-center text-[12px] text-neutral-400">输入课程名开始搜索（官方接口约 2-6 秒）</div>
+          ) : searching ? (
+            <div className="py-10 text-center text-[12px] text-neutral-400">搜索中…（官方接口约 2-6 秒）</div>
+          ) : results.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {results.map((it) => {
+                const teclId = String(it.id ?? "");
+                const added = addedIds.has(teclId);
+                const name = String(it.subjName || it.teclName || "");
+                return (
+                  <div key={teclId} className="flex items-start gap-2 rounded-lg border border-neutral-200 p-2.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12.5px] font-medium text-neutral-800" title={name}>
+                        {name}
+                      </div>
+                      <div className="truncate text-[10.5px] text-neutral-500">
+                        {String(it.teclName || "")}
+                        {it.teclCode ? ` (${String(it.teclCode)})` : ""}
+                      </div>
+                      <div className="truncate text-[10.5px] text-neutral-400">
+                        {itemTeachers(it)}
+                        {termFromTeclCode(String(it.teclCode ?? ""))
+                          ? ` · ${termFromTeclCode(String(it.teclCode ?? ""))}`
+                          : ""}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => add(it)}
+                      disabled={added || addingId !== null || busy !== null}
+                      className={`shrink-0 rounded-md border px-2.5 py-1 text-[11px] ${
+                        added
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+                          : "border-neutral-300 text-neutral-600 hover:bg-neutral-50"
+                      } disabled:opacity-60`}>
+                      {added ? "✓ 已添加" : addingId === teclId ? "添加中…" : "＋ 添加"}
+                    </button>
+                  </div>
+                );
+              })}
+              {hasMore && (
+                <button
+                  onClick={loadMore}
+                  disabled={addingId !== null || loadingMore}
+                  className="rounded-lg border border-dashed border-neutral-300 py-2 text-[11.5px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
+                  {loadingMore ? "加载中…" : "加载更多（同名班跨多年份时首页可能被老班占满）"}
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="py-10 text-center text-[12px] text-neutral-400">没有匹配的课程</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 删除确认框：课程 + 课时缓存一并删除 */
+function ConfirmDeleteDialog({
+  course,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  course: ClassroomCourse;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={onCancel}>
+      <div className="w-[380px] max-w-full rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold">删除课程</h3>
+        <p className="mt-2 text-[12px] leading-6 text-neutral-600">
+          删除《{course.subj_name}》并清空其 {course.lesson_count} 讲课时缓存？
+          <br />
+          <span className="text-[11px] text-neutral-400">之后可重新搜索添加。</span>
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg border border-neutral-200 px-3.5 py-1.5 text-[13px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-40">
+            取消
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded-lg bg-red-600 px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-red-500 disabled:opacity-40">
+            {busy ? "删除中…" : "删除"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** 手动 Cookie 兜底：网页登录失败时，从官方页复制 Cookie 粘贴（规格 §8 保底路径，原样保留） */
@@ -743,4 +868,3 @@ function CookieDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () =
     </div>
   );
 }
-
