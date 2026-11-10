@@ -1,41 +1,59 @@
 "use client";
 
 /**
- * 课堂专区：纯内嵌浏览器（整块 iframe → 反代 3778 → 官方录播平台）。
- * 旧的课程树/课时/笔记/期末手册功能已整体移除，等待重新构思（2026-10-30）。
- * 保留：合规声明拦截、登录态同源探测（iframe 上报）、重载保持当前页、主页回平台首页、Cookie 兜底。
+ * 课堂专区（v3，规格 docs/superpowers/specs/2026-11-09-classroom-native-ui-design.md）：
+ * 原生 UI——课程列表/搜索/课时/机位播放。不再内嵌 iframe（§7 已整体移除）。
+ * 分工（§3）：需要官方会话的请求由本页经反代 3778 发起（Cookie 浏览器托管）；
+ * 拿到结果提交 3777 落库；本地列表/课时从 3777 读缓存。
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import DisclaimerGate, { DISCLAIMER_VERSION } from "@/components/classroom/DisclaimerGate";
+import {
+  CVS_PROXY_BASE,
+  CVS_VIEW_NAMES,
+  extractListItems,
+  extractVodViews,
+} from "@/lib/classroom/types";
+import type { ClassroomCourse, ClassroomLesson, CvsVodView } from "@/lib/classroom/types";
 
-const PROXY = "http://localhost:3778";
+type Playing = { lesson: ClassroomLesson; views: CvsVodView[]; viewIdx: number; viaProxy: boolean };
+
+/** 经反代调官方接口（credentials 带 localhost:3778 域 Cookie） */
+async function proxyFetch(path: string): Promise<unknown> {
+  const r = await fetch(CVS_PROXY_BASE + path, { credentials: "include" });
+  if (!r.ok) throw new Error(`反代请求失败 HTTP ${r.status}`);
+  const ct = r.headers.get("content-type") ?? "";
+  return ct.includes("application/json") ? r.json() : r.text();
+}
+
+/** 官方直链 → 反代 /__h/ 转发（直链播放失败时的兜底，规格 §3） */
+function toProxyUrl(u: string): string {
+  const x = new URL(u);
+  return `${CVS_PROXY_BASE}/__h/${x.host}${x.pathname}${x.search}`;
+}
 
 export default function ClassroomPage() {
   const [agreed, setAgreed] = useState<boolean | null>(null);
-  // 登录态：iframe（3778 同源）注入脚本探测后上报，比跨源 fetch 可靠
   const [proxyRunning, setProxyRunning] = useState<boolean | null>(null);
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
-  const [reloadKey, setReloadKey] = useState(0); // 重载内嵌 iframe
-  const [manualSrc, setManualSrc] = useState<string | null>(null); // 重载时保持当前页（不回首页）
-  const [cookieOpen, setCookieOpen] = useState(false);
+  const [courses, setCourses] = useState<ClassroomCourse[]>([]);
+  const [q, setQ] = useState("");
+  const [activeCourse, setActiveCourse] = useState<ClassroomCourse | null>(null);
+  const [lessons, setLessons] = useState<ClassroomLesson[]>([]);
+  const [playing, setPlaying] = useState<Playing | null>(null);
+  const [playError, setPlayError] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-
-  const navUrlRef = useRef(`${PROXY}/jy-application-resourcemanage-ui/`); // iframe 当前真实地址（注入脚本上报）
-  const frameAuthRef = useRef(0); // 最近一次 iframe 同源探测登录态的时间戳
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
-
-  /** 向 iframe 发导航指令（注入脚本代执行；跨端口只能 postMessage） */
-  function frameNav(cmd: "home") {
-    iframeRef.current?.contentWindow?.postMessage({ source: "ifcope-host", cmd }, PROXY);
-  }
+  const [cookieOpen, setCookieOpen] = useState(false);
 
   // 同意状态（存版本号：声明更新可重新拦截）
   useEffect(() => {
     setAgreed(localStorage.getItem("ifcope.classroom.agreed") === DISCLAIMER_VERSION);
   }, []);
 
-  // 代理状态
+  // 反代状态
   useEffect(() => {
     fetch("/api/classroom/proxy-info")
       .then((r) => r.json())
@@ -43,13 +61,12 @@ export default function ClassroomPage() {
       .catch(() => setProxyRunning(false));
   }, []);
 
-  // 登录态轮询（兜底；iframe 内同源探测结果到达时以其为准，15s 内不覆盖）
+  // 登录态轮询（Cookie 在 3778 域，跨源带凭据 fetch——CORS 已放行 3777）
   useEffect(() => {
-    if (!agreed || !proxyRunning) return;
+    if (!agreed) return;
     let stop = false;
     const probe = () => {
-      if (Date.now() - frameAuthRef.current < 15000) return;
-      fetch(`${PROXY}/__whoami`, { credentials: "include" })
+      fetch(`${CVS_PROXY_BASE}/__whoami`, { credentials: "include" })
         .then((r) => r.json())
         .then((d) => !stop && setLoggedIn(Boolean(d.loggedIn)))
         .catch(() => !stop && setLoggedIn(false));
@@ -60,36 +77,143 @@ export default function ClassroomPage() {
       stop = true;
       clearInterval(t);
     };
-  }, [agreed, proxyRunning]);
+  }, [agreed]);
 
-  // 接收 iframe（3778 反代注入脚本）上报：登录态 + 当前导航（重载保持位置用）
-  useEffect(() => {
-    const onMsg = (e: MessageEvent) => {
-      if (e.origin !== PROXY) return;
-      const d = e.data as
-        | { source?: string; type?: string; url?: string; title?: string; loggedIn?: boolean }
-        | null;
-      if (!d || d.source !== "ifcope-frame") return;
-      if (d.type === "auth") {
-        frameAuthRef.current = Date.now();
-        setLoggedIn(Boolean(d.loggedIn));
-        return;
-      }
-      if (d.type === "nav" && d.url) navUrlRef.current = d.url;
-    };
-    window.addEventListener("message", onMsg);
-    return () => window.removeEventListener("message", onMsg);
+  const loadCourses = useCallback(async () => {
+    try {
+      const r = await fetch("/api/classroom/courses");
+      const d = (await r.json()) as { courses?: ClassroomCourse[] };
+      setCourses(d.courses ?? []);
+    } catch {
+      /* 本地读失败保持现状 */
+    }
   }, []);
+
+  useEffect(() => {
+    if (agreed) loadCourses();
+  }, [agreed, loadCourses]);
+
+  /** 同步课程：经反代分页拉 teachingclass/list → 提交 3777 落库 → 刷新本地（失败不清缓存） */
+  async function syncCourses() {
+    setBusy("同步课程");
+    setError(null);
+    setMsg(null);
+    try {
+      const all: unknown[] = [];
+      for (let page = 1; page <= 10; page++) {
+        const json = await proxyFetch(
+          `/v1/teachingclass/list?page.pageIndex=${page}&page.pageSize=200`
+        );
+        const items = extractListItems(json);
+        all.push(...items);
+        if (items.length < 200) break;
+      }
+      if (all.length === 0) throw new Error("官方未返回任何课程（结构变化或账号无课程）");
+      const r = await fetch("/api/classroom/courses/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: all }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error ?? `落库失败 HTTP ${r.status}`);
+      await loadCourses();
+      setMsg({ kind: "ok", text: `课程已同步：新增 ${d.inserted}、更新 ${d.updated}` });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      setError(`同步失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境（已缓存的课程不受影响）。`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** 进入课程：读本地课时缓存 */
+  async function openCourse(course: ClassroomCourse) {
+    setActiveCourse(course);
+    setPlaying(null);
+    setPlayError(false);
+    setError(null);
+    try {
+      const r = await fetch(`/api/classroom/courses/${course.id}/lessons`);
+      const d = (await r.json()) as { lessons?: ClassroomLesson[] };
+      setLessons(d.lessons ?? []);
+    } catch {
+      setLessons([]);
+    }
+  }
+
+  /** 刷新课时：经反代拉 subject_vod_list_new → 整体替换落库（参数见规格 §2） */
+  async function refreshLessons() {
+    if (!activeCourse) return;
+    setBusy("刷新课时");
+    setError(null);
+    setMsg(null);
+    try {
+      const qs = new URLSearchParams({
+        "page.pageIndex": "1",
+        "page.pageSize": "1000",
+        teclIds: activeCourse.tecl_id,
+        "page.orders[0].asc": "false",
+        "page.orders[0].field": "courBeginTime",
+        schoolOpenStatusFlag: "false",
+      });
+      const json = await proxyFetch(`/v1/subject_vod_list_new?${qs}`);
+      const items = extractListItems(json);
+      if (items.length === 0) throw new Error("官方未返回课时（结构变化、无回放或未登录）");
+      const r = await fetch(`/api/classroom/courses/${activeCourse.id}/lessons/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error ?? `落库失败 HTTP ${r.status}`);
+      const r2 = await fetch(`/api/classroom/courses/${activeCourse.id}/lessons`);
+      const d2 = (await r2.json()) as { lessons?: ClassroomLesson[] };
+      setLessons(d2.lessons ?? []);
+      setMsg({ kind: "ok", text: `课时已更新：${d.inserted} 讲` });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      setError(`刷新课时失败：${m}。请确认已登录 CVS 且在校内网/VPN 环境。`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** 点课时：实时取流（直链不落库），空机位显式报错 */
+  async function playLesson(lesson: ClassroomLesson) {
+    setBusy("取流中");
+    setError(null);
+    try {
+      const json = await proxyFetch(`/v1/course_vod_videoinfos?courId=${lesson.cour_id}`);
+      const views = extractVodViews(json);
+      if (views.length === 0) throw new Error("未取到可播放机位（转码中或结构变化）");
+      setPlaying({ lesson, views, viewIdx: 0, viaProxy: false });
+      setPlayError(false);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      setError(`打开播放失败：${m}。可稍后重试或刷新课时。`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const shown = q.trim()
+    ? courses.filter((c) =>
+        `${c.subj_name} ${c.tecl_name} ${c.tecl_code} ${c.term}`.toLowerCase().includes(q.trim().toLowerCase())
+      )
+    : courses;
+  const playingSrc =
+    playing ? (playing.viaProxy ? toProxyUrl(playing.views[playing.viewIdx].url) : playing.views[playing.viewIdx].url) : "";
 
   return (
     <div className="flex h-screen overflow-hidden bg-white">
       <Sidebar configured={null} />
 
       <main className="flex min-w-0 flex-1 flex-col">
+        {/* 顶栏 */}
         <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-2.5">
           <div className="flex min-w-0 items-center gap-3">
             <div className="text-[13px] font-semibold">课堂</div>
-            <span className="truncate text-[11px] text-neutral-400">官方录播平台 · 应用内嵌浏览</span>
+            <span className="truncate text-[11px] text-neutral-400">官方录播平台 · 原生浏览</span>
           </div>
           <div className="flex items-center gap-2">
             {msg && (
@@ -108,19 +232,23 @@ export default function ClassroomPage() {
               </span>
             )}
             <button
-              onClick={() => {
-                setManualSrc(navUrlRef.current); // 保持当前页，不回首页
-                setReloadKey((k) => k + 1);
-              }}
-              title="重新加载当前内嵌页面（保持在你现在看的这一页）"
+              onClick={() => window.open(CVS_PROXY_BASE + "/__login", "_blank")}
+              title="打开官方登录页（顶层窗口），完成后回到本页"
               className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50">
-              ↻ 重载
+              登录 CVS
             </button>
             <button
-              onClick={() => frameNav("home")}
-              title="内嵌页面回平台首页"
+              onClick={syncCourses}
+              disabled={busy !== null}
+              title="从官方平台同步我的课程（需已登录 + 校内网/VPN）"
+              className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
+              {busy === "同步课程" ? "同步中…" : "⟳ 同步课程"}
+            </button>
+            <button
+              onClick={() => setCookieOpen(true)}
+              title="页面内登录无法完成时，手动复制官方页 Cookie 粘贴"
               className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50">
-              ⌂ 主页
+              Cookie 兜底
             </button>
             {loggedIn ? (
               <span className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-[11px] text-emerald-700">
@@ -128,25 +256,238 @@ export default function ClassroomPage() {
               </span>
             ) : (
               <span className="rounded-md bg-neutral-100 px-2.5 py-1 text-[11px] text-neutral-500">
-                未登录 · 请在右侧页面内登录
+                未登录
               </span>
             )}
-            <button
-              onClick={() => setCookieOpen(true)}
-              title="页面内登录无法完成时，手动复制官方页 Cookie 粘贴"
-              className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50">
-              Cookie 兜底
-            </button>
           </div>
         </div>
 
-        <iframe
-          ref={iframeRef}
-          key={reloadKey}
-          src={manualSrc ?? PROXY + "/jy-application-resourcemanage-ui/"}
-          title="录播平台"
-          className="min-h-0 flex-1 border-0"
-        />
+        {/* 错误横幅（同步/播放失败显式呈现，不清缓存） */}
+        {error && (
+          <div className="flex items-start justify-between gap-3 border-b border-red-200 bg-red-50 px-5 py-2 text-[12px] text-red-700">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="shrink-0 text-red-400 hover:text-red-600">
+              ✕
+            </button>
+          </div>
+        )}
+
+        <div className="flex min-h-0 flex-1">
+          {/* 左栏：搜索 + 课程卡片 */}
+          <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-200">
+            <div className="border-b border-neutral-100 p-3">
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="搜索课程 / 教师 / 学期"
+                className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-[12px] outline-none focus:border-neutral-400"
+              />
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              {shown.length === 0 ? (
+                <div className="mt-8 text-center text-[12px] leading-6 text-neutral-400">
+                  {courses.length === 0 ? (
+                    <>
+                      还没有课程缓存
+                      <br />
+                      先「登录 CVS」，再点「同步课程」
+                    </>
+                  ) : (
+                    "没有匹配的课程"
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2.5">
+                  {shown.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => openCourse(c)}
+                      className={`rounded-lg border p-3 text-left transition ${
+                        activeCourse?.id === c.id
+                          ? "border-neutral-900 bg-neutral-50"
+                          : "border-neutral-200 hover:border-neutral-300"
+                      }`}>
+                      <div className="flex gap-3">
+                        {c.cover_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={c.cover_url}
+                            alt=""
+                            className="h-14 w-20 shrink-0 rounded object-cover bg-neutral-100"
+                          />
+                        ) : (
+                          <div className="flex h-14 w-20 shrink-0 items-center justify-center rounded bg-neutral-100 text-[16px]">
+                            📚
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px] font-medium text-neutral-800" title={c.subj_name}>
+                            {c.subj_name}
+                          </div>
+                          <div className="truncate text-[11px] text-neutral-500" title={`${c.tecl_name}(${c.tecl_code})`}>
+                            {c.tecl_name}
+                            {c.tecl_code ? ` (${c.tecl_code})` : ""}
+                          </div>
+                          <div className="truncate text-[11px] text-neutral-400">
+                            {safeTeachers(c.teac_names)} · {c.term}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-1.5 text-[10.5px] text-neutral-400">{c.lesson_count} 讲已缓存</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </aside>
+
+          {/* 右主区 */}
+          <section className="flex min-w-0 flex-1 flex-col">
+            {playing ? (
+              /* ── 播放态 ── */
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-2">
+                  <div className="min-w-0 truncate text-[13px] font-medium">{playing.lesson.title}</div>
+                  <div className="flex items-center gap-1.5">
+                    {playing.views.map((v, i) => (
+                      <button
+                        key={`${v.viewNum}-${i}`}
+                        onClick={() => setPlaying({ ...playing, viewIdx: i, viaProxy: false, lesson: playing.lesson })}
+                        className={`rounded border px-2 py-1 text-[11px] ${
+                          i === playing.viewIdx
+                            ? "border-neutral-900 bg-neutral-900 text-white"
+                            : "border-neutral-200 text-neutral-500 hover:bg-neutral-50"
+                        }`}>
+                        {CVS_VIEW_NAMES[v.viewNum] ?? `机位${v.viewNum}`}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setPlaying(null)}
+                      className="ml-1 rounded border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50">
+                      ← 返回列表
+                    </button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 bg-black">
+                  {playError ? (
+                    <div className="flex h-full flex-col items-center justify-center gap-3 text-[13px] text-neutral-300">
+                      <div>播放失败（直链与代理均已尝试）。可切换机位或稍后重试。</div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            setPlayError(false);
+                            setPlaying({ ...playing, viaProxy: false });
+                          }}
+                          className="rounded-md border border-neutral-600 px-3 py-1.5 text-[12px] hover:bg-neutral-800">
+                          重试
+                        </button>
+                        <button
+                          onClick={() => setPlaying(null)}
+                          className="rounded-md border border-neutral-600 px-3 py-1.5 text-[12px] hover:bg-neutral-800">
+                          回列表
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* key 强制按课时/机位/通道切换重挂载；直链失败自动切反代代理兜底一次（规格 §3） */
+                    <video
+                      key={`${playing.lesson.id}:${playing.viewIdx}:${playing.viaProxy ? "p" : "d"}`}
+                      src={playingSrc}
+                      controls
+                      autoPlay
+                      className="h-full w-full"
+                      onError={() => {
+                        if (!playing.viaProxy) setPlaying({ ...playing, viaProxy: true });
+                        else setPlayError(true);
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            ) : activeCourse ? (
+              /* ── 课程态：课时表 ── */
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[13px] font-semibold">{activeCourse.subj_name}</div>
+                    <div className="truncate text-[11px] text-neutral-400">
+                      {activeCourse.tecl_name} · {safeTeachers(activeCourse.teac_names)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setActiveCourse(null);
+                        setLessons([]);
+                      }}
+                      className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50">
+                      ← 课程
+                    </button>
+                    <button
+                      onClick={refreshLessons}
+                      disabled={busy !== null}
+                      className="rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:bg-neutral-50 disabled:opacity-40">
+                      {busy === "刷新课时" ? "刷新中…" : "⟳ 刷新课时"}
+                    </button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                  {lessons.length === 0 ? (
+                    <div className="mt-8 text-center text-[12px] leading-6 text-neutral-400">
+                      本课还没有缓存课时
+                      <br />
+                      点右上「刷新课时」从官方平台拉取（需已登录 + 校内网/VPN）
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-1.5">
+                      {lessons.map((l) => {
+                        const playable = l.vod_status === 5;
+                        return (
+                          <button
+                            key={l.id}
+                            onClick={() => playable && playLesson(l)}
+                            disabled={!playable || busy !== null}
+                            className={`flex items-center justify-between rounded-lg border px-4 py-2.5 text-left ${
+                              playable
+                                ? "border-neutral-200 hover:border-neutral-400 hover:bg-neutral-50"
+                                : "cursor-not-allowed border-neutral-100 bg-neutral-50 opacity-60"
+                            }`}>
+                            <div className="min-w-0">
+                              <div className={`truncate text-[13px] ${playable ? "text-neutral-800" : "text-neutral-400"}`}>
+                                {l.title}
+                              </div>
+                              <div className="text-[11px] text-neutral-400">{l.begin_time}</div>
+                            </div>
+                            {!playable ? (
+                              <span className="shrink-0 rounded bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-400">
+                                {l.vod_status === -3 ? "转码中" : "不可播"}
+                              </span>
+                            ) : (
+                              <span className="shrink-0 text-[13px] text-neutral-300">▶</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* ── 空态 ── */
+              <div className="flex min-h-0 flex-1 items-center justify-center text-center text-[12.5px] leading-6 text-neutral-400">
+                {courses.length === 0 ? (
+                  <>
+                    从左侧开始：
+                    <br />
+                    「登录 CVS」→「同步课程」→ 选课 → 刷课时 → 看回放
+                  </>
+                ) : (
+                  <>← 选择一门课程</>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
       </main>
 
       {cookieOpen && (
@@ -159,7 +500,7 @@ export default function ClassroomPage() {
         />
       )}
 
-      {/* 合规首次声明拦截（硬要求：内嵌官方教学资源必须先声明） */}
+      {/* 合规首次声明拦截（硬要求，v2 §7 文本与版本号不变） */}
       {agreed === false && (
         <DisclaimerGate
           onAccept={() => {
@@ -172,7 +513,17 @@ export default function ClassroomPage() {
   );
 }
 
-/** 手动 Cookie 兜底：网页登录失败时，从官方页复制 Cookie 粘贴（规格 §8 保底路径） */
+/** teac_names 是 JSON 数组字符串，解析失败按原文显示 */
+function safeTeachers(json: string): string {
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) && arr.length ? arr.join("，") : "";
+  } catch {
+    return json;
+  }
+}
+
+/** 手动 Cookie 兜底：网页登录失败时，从官方页复制 Cookie 粘贴（规格 §8 保底路径，原样保留） */
 function CookieDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -217,7 +568,9 @@ function CookieDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () =
         />
         {err && <div className="mt-3 border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">{err}</div>}
         <div className="mt-4 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border border-neutral-200 px-3.5 py-1.5 text-[13px] text-neutral-600 hover:bg-neutral-50">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-neutral-200 px-3.5 py-1.5 text-[13px] text-neutral-600 hover:bg-neutral-50">
             取消
           </button>
           <button
@@ -231,3 +584,4 @@ function CookieDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () =
     </div>
   );
 }
+
