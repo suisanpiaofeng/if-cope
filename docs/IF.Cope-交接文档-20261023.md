@@ -171,21 +171,21 @@ embed_meta(key PK, value)  -- embed_dim 自愈（启动时对首条向量校验�
 
 ## 9. 待办 / roadmap（下一会话从这里接）
 
-### 9.1 课堂专区 v2（已实现，`classroom-v2` 分支，待真机联调）
+### 9.1 课堂专区 v3（原生 UI，`classroom-v2` 分支，待真机登录校准）
 
-**架构**（规格 `docs/课堂专区-架构规格-v2-20261028.md`）：本机反代（3778，随应用启动）内嵌看 CVS 回放 + 网页登录（零 Playwright，Cookie 浏览器托管）+ 逐课笔记/期末复习手册双层 + RAG 回流。
+**架构**（规格 `docs/superpowers/specs/2026-11-09-classroom-native-ui-design.md`，修订 v2 D1）：原生 UI 看 CVS 回放——前端经反代 3778（带浏览器托管 Cookie）调官方接口拉目录/取流，3777 只做元数据 SQLite 落库，`<video>` 直连官方媒体直链（失败自动切 `/__h/` 代理兜底一次）；iframe 内嵌方案已彻底移除（含反代导航收敛注入）。
 
-**已实现（2026-10-30 重构后）**：课堂页现为**纯内嵌浏览器**（整块 iframe → 反代 3778 → 官方平台）+ 登录态探测 + 重载/主页 + Cookie 兜底 + 合规声明拦截。旧的课程树/课时/笔记/期末手册功能（课程登记、同步、note/digest API、`classroom_*` 表、`store/notes/digest/rag/types/cvsApi` 模块、相关 smoke 脚本）已整体移除，等待重新构思；旧库中的 `classroom_*` 表保留不影响。反代（3778）本身不受影响，仍可内嵌官方页 + 网页登录。
+**已实现（2026-11-09）**：`/classroom` 三态原生页（课程卡片列表+本地搜索 → 课时表+转码灰态 → 机位播放器）；接口层 `src/lib/classroom/{types,store}.ts`（常量/字段提取器单点修）；API `courses` GET/sync/DELETE + `courses/[id]/lessons` GET/sync（同步带结构校验，不符整体拒 400 不写半包）；旧空 `classroom_*` 表启动时自动 DROP 重建为 v3 列（带 user_id，D6）；合规声明拦截/Cookie 兜底/登录态轮询沿用。CDP 冒烟 14 PASS（声明/列表/搜索/课时/灰态/服务失败横幅+缓存不丢）。
 
-**真机联调清单**（校园网 + 已登录，逐条改常量）：
-1. **CAS 域与登录路径**：`src/lib/classroom/cookieRewrite.ts` 的 `CAS_HOSTS`/`CAS_LOGIN_PATH`——打开登录弹窗看实际跳转域名/路径改这里。
-2. **课时/字幕接口路径**：已随旧功能移除（原 `cvsApi.ts`）；重新构思功能时从 `ref/cvs-replay-notes-skill/references/principles.md` 找真实接口路径（`/subject_vod_list_new?teclIds=<id>` 等）。
-3. **官方页资源 404**：内嵌回放页若图片/脚本加载不出，是响应体里写死的绝对地址需在 `revProxy.ts` 的 `rewriteBody` 补替换规则。
-4. **整链验证（旧功能删除后）**：iframe 内嵌官网 → 页内登录 → 点课程在框内打开不弹新标签 → 重载保持当前页 → 主页按钮回首页。
+**已实证（2026-11-09，未登录直连）**：`/v1/teachingclass/list`、`/v1/subject_vod_list_new`、`/v1/course_vod_videoinfos` 三路径在真实服务器存在（返回 401 JSON 而非 404）；官方 SPA 静态资源公网可拉，接口逆向工具 `scripts/recon/scan_api.js`。
 
-**运维要点**：3778 端口占用排查（`netstat -ano | grep 3778`）；Cookie 过期 = iframe 显示登录页 → 点「登录 CVS」重登；上游卡死有 15s 超时保护（不会永久转圈）。
+**真机联调清单（校园网 + 已登录，Task 6 未决）**：
+1. **字段包裹层校准**：登录后点「同步课程」，若报「结构变化/未返回课程」，看 F12 Network 的 `teachingclass/list` 实际响应 → 改 `types.ts` 的 `extractListItems` 单点；课时表同理改 `subject_vod_list_new`。
+2. **媒体直链**：点课时若「播放失败」→ 看 `course_vod_videoinfos` 返回的 url 主机名/字段路径 → 若被改名改 `extractVodViews`；若需 Referer/Cookie，确认自动切 `/__h/` 代理兜底后能否播（非 `*.seu.edu.cn` 域会被反代拦截属预期）。
+3. **登录链（沿 v2 已验证结论）**：顶栏「登录 CVS」顶层窗口走 CAS；失败用 Cookie 兜底粘贴。
+4. **整链验收**：登录 → 同步 → 选课 → 刷新课时 → 播放切机位 → 转码中灰态 → 杀 3778 再同步出横幅且列表在。
 
-**iframe ↔ 宿主页通信**（`cookieRewrite.ts` 注入脚本）：反代给 HTML 注入 `<script data-ifcope-frame-nav>`，职责：① 收敛跳出（window.open/_blank → iframe 内跳转）；② 用 postMessage（source: `ifcope-frame`，目标 origin 3777）向宿主页上报 `nav`（当前 URL/标题，鉤 pushState+1s 轮询）与 `auth`（同源 fetch `/__whoami`，每 5s）。宿主页 `page.tsx` 用 nav 上报维护 navUrlRef，「重载」据此保持当前页（不回首页）。tecl 捕获与自动登记已随旧功能移除。排查：宿主页 F12 Console 看 `message` 事件是否到达（注意宿主页校验了 `e.origin === http://localhost:3778`，改反代端口要同步改注入脚本里的 `TOP` 常量）。
+**运维要点**：3778 端口占用排查（`netstat -ano | grep 3778`）；Cookie 过期 = 同步/刷新报 401 →「登录 CVS」重登或 Cookie 兜底；上游卡死有 15s 超时保护（不会永久转圈）。
 
 **AIGC 目录已移除（2026-11-04）**：不再有固定的 AIGC 类目；所有产物（笔记/知识地图/翻译）默认落「未归类」，可拖入任意类目。db.ts 启动时自动迁移（解散 pinned=1 或名为 AIGC 的类目：内容回未归类、子类目提顶级、删行）。PDF 译文更进一步：直接入库为资源（type=翻译，与原文同类目），不再造产物行，历史由翻译页从资源推导（兼容旧产物）。getAigcCategoryId 函数已删除。译文资源带 origin_id 列（指向原文 id）：翻译页资源栏显示全部 PDF（已译带✓绿标、批量翻译自动跳过）；历史翻译仅本页显示，点击打开原文↔译文对照（无 origin 关联的旧数据回退单栏）。
 
