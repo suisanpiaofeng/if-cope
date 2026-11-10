@@ -6,7 +6,7 @@ import type { TodoItem } from "./todo";
  *  并注入实时资料库状态（类目/资料/产物 + 本次对话选中的资料）。
  *  参考 TRAE/Cursor 类 AI IDE 的做法：System Context 注入 + Function Calling。 */
 
-export function buildSystemPrompt(selectedSourceIds: number[], todos: TodoItem[] = []): string {
+export function buildSystemPrompt(selectedSourceIds: number[], todos: TodoItem[] = [], userSection: string = ""): string {
   return `你是 IF.Cope 的内置 AI 助手，运行在一个校园 AI 学习工作站应用里。你不仅能答疑，还能通过工具直接操作这个应用。
 
 ## 应用结构（IF.Cope）
@@ -28,7 +28,9 @@ ${listToolsText()}
 - 工具结果就是真实执行结果，如实转告学生；失败了就说明原因。
 - 只是资料内容问答时不需要调用工具，直接基于资料片段回答。
 
-<agent_loop>
+${userSection ? `${userSection}
+
+` : ""}<agent_loop>
 你在 Agent 循环中工作，迭代完成任务：
 1. 分析状态：结合最近的用户消息与上一步工具结果，判断当前进度
 2. 选择工具：每轮只做一步——选一个工具调用，做完看结果再决定下一步
@@ -46,6 +48,13 @@ ${listToolsText()}
 - 单一直接的小任务（一次移动、一次查询）不必用 todo_write；拿不准就用
 - 任务描述具体可执行，复杂任务拆成小步
 </task_management>
+
+<user_preferences>
+长期偏好管理（save_preference/list_preferences/delete_preference）：
+- 只在学生**明确要求**时保存（“记住/以后都/别再”等措辞），不主动猜测偏好
+- 保存前先复述确认要记住的文本（“将记住：…”）
+- 偏好库上限 50 条，存满时提示学生先清理
+</user_preferences>
 
 输出纪律：
 - 工具调用前先用一句话说明本次调用的意图（例：“把《高数》移到「数学」类目”）

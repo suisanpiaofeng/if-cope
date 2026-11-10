@@ -15,6 +15,9 @@ export const TOOL_POLICY: Record<string, { timeoutMs: number; retry: boolean }> 
   move_artifact: { timeoutMs: 10_000, retry: false },
   create_category: { timeoutMs: 10_000, retry: false },
   todo_write: { timeoutMs: 10_000, retry: false },
+  save_preference: { timeoutMs: 10_000, retry: false },
+  list_preferences: { timeoutMs: 15_000, retry: true },
+  delete_preference: { timeoutMs: 10_000, retry: false },
   generate_summary: { timeoutMs: 120_000, retry: false },
 };
 

@@ -5,6 +5,7 @@ import { buildSystemPrompt } from "./agent/system";
 import { TOOLS, type ToolCall } from "./agent/tools";
 import { runTool } from "./agent/executor";
 import { getTodos, type TodoItem } from "./agent/todo";
+import { listPrefs, buildUserSection } from "./agent/prefs";
 import { LoopGuard } from "./agent/loopGuards";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
@@ -74,7 +75,10 @@ export async function* streamChat(
   let resumesLeft = 2; // 断流续跑预算（Task 5）：最多续跑 2 次，计入轮次预算
   for (let round = 0; round <= maxRounds + 2; round++) {
     const useTools = round < maxRounds;
-    messages[0] = { role: "system", content: buildSystemPrompt(sourceIds, getTodos(threadId)) };
+    messages[0] = {
+      role: "system",
+      content: buildSystemPrompt(sourceIds, getTodos(threadId), buildUserSection(s.userDirective ?? "", listPrefs())),
+    };
     // 手动迭代：转发增量给消费者的同时，截获工具调用与累计答案文本
     let roundText = "";
     let toolCalls: RawToolCall[] = [];

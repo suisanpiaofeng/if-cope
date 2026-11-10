@@ -2,6 +2,7 @@ import db from "@/lib/db";
 import { generateSummary } from "@/lib/artifact";
 import { webSearch, webHitsToContext } from "@/lib/webSearch";
 import { replaceTodos, type TodoItem } from "./todo";
+import { listPrefs, savePref, deletePref, countPrefs, PREFS_MAX } from "./prefs";
 
 /** Agent 工具：OpenAI function calling 格式。
  *  定义（TOOLS）给模型看；executeTool（执行器）在服务端真实操作数据库。
@@ -128,11 +129,69 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "save_preference",
+      description: "记住学生的长期偏好（仅当学生明确说「记住/以后都/别再」等时调用）。存入前复述确认文本；同文本幂等不重复",
+      parameters: {
+        type: "object",
+        properties: { text: { type: "string", description: "偏好描述（一句话，如：回答别用列表）" } },
+        required: ["text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_preferences",
+      description: "列出全部长期偏好（id + 文本）",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_preference",
+      description: "删除一条长期偏好",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "integer", description: "偏好 id（从 list_preferences 得到）" } },
+        required: ["id"],
+      },
+    },
+  },
 ] as const;
 
 /** 执行工具调用：返回给模型的文本结果；失败抛错（由调用方转成错误文本回喂模型） */
 export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<string> {
   switch (call.name) {
+    case "save_preference": {
+      const text = String(call.args.text ?? "").trim();
+      if (!text) throw new Error("偏好文本不能为空");
+      if (countPrefs() >= PREFS_MAX) {
+        return `偏好库已满（${PREFS_MAX} 条上限）：请先用 delete_preference 清理后再存，或提醒学生到设置页管理。`;
+      }
+      const { id, created } = savePref(text);
+      return created
+        ? `已记住偏好 #${id}：「${text}」（后续对话会生效）`
+        : `该偏好已存在（#${id}），未重复保存：「${text}」`;
+    }
+
+    case "list_preferences": {
+      const prefs = listPrefs();
+      return prefs.length
+        ? `共 ${prefs.length} 条偏好：
+${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
+        : "（还没有保存任何偏好）";
+    }
+
+    case "delete_preference": {
+      const id = Number(call.args.id);
+      if (!Number.isInteger(id)) throw new Error("id 必须是整数");
+      return deletePref(id) ? `已删除偏好 #${id}` : `偏好 #${id} 不存在`;
+    }
+
     case "todo_write": {
       const arr = call.args.todos;
       if (!Array.isArray(arr)) throw new Error("todos 必须是数组");
