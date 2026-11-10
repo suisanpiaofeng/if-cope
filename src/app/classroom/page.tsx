@@ -38,10 +38,15 @@ async function proxyFetch(pathOrUrl: string): Promise<unknown> {
   return ct.includes("application/json") ? r.json() : r.text();
 }
 
-/** 官方直链 → 反代 /__h/ 转发（直链播放失败时的兜底，规格 §3） */
+/** 官方直链 → 反代 /__h/ 转发（直链播放失败时的兜底，规格 §3）。
+ *  防御：URL 非法/相对路径时原样交 video，让 onError 走错误面板（不能在渲染路径 throw） */
 function toProxyUrl(u: string): string {
-  const x = new URL(u);
-  return `${CVS_PROXY_BASE}/__h/${x.host}${x.pathname}${x.search}`;
+  try {
+    const x = new URL(u);
+    return `${CVS_PROXY_BASE}/__h/${x.host}${x.pathname}${x.search}`;
+  } catch {
+    return u;
+  }
 }
 
 export default function ClassroomPage() {
@@ -363,15 +368,7 @@ export default function ClassroomPage() {
                 /* ── 远程搜索结果（全校课程；搜到自己那门点 + 添加） ── */
                 searching ? (
                   <div className="mt-6 text-center text-[12px] text-neutral-400">搜索中…（官方接口约 2-6 秒）</div>
-                ) : searchErr ? (
-                  <div className="mt-4 rounded border border-red-200 bg-red-50 p-2.5 text-[11.5px] leading-5 text-red-700">
-                    搜索失败：{searchErr}
-                    <br />
-                    请确认已登录 CVS 且在校内网/VPN 环境
-                  </div>
-                ) : searchResults.length === 0 ? (
-                  <div className="mt-6 text-center text-[12px] text-neutral-400">没有匹配的课程</div>
-                ) : (
+                ) : searchResults.length > 0 ? (
                   <div className="flex flex-col gap-2">
                     {searchResults.map((it) => {
                       const teclId = String(it.id ?? "");
@@ -415,7 +412,20 @@ export default function ClassroomPage() {
                         {busy === "加载更多" ? "加载中…" : "加载更多（同名班跨多年份时首页可能被老班占满）"}
                       </button>
                     )}
+                    {searchErr && (
+                      <div className="rounded border border-red-200 bg-red-50 p-2 text-[11px] text-red-700">
+                        加载更多失败：{searchErr}
+                      </div>
+                    )}
                   </div>
+                ) : searchErr ? (
+                  <div className="mt-4 rounded border border-red-200 bg-red-50 p-2.5 text-[11.5px] leading-5 text-red-700">
+                    搜索失败：{searchErr}
+                    <br />
+                    请确认已登录 CVS 且在校内网/VPN 环境
+                  </div>
+                ) : (
+                  <div className="mt-6 text-center text-[12px] text-neutral-400">没有匹配的课程</div>
                 )
               ) : courses.length === 0 ? (
                 <div className="mt-8 text-center text-[12px] leading-6 text-neutral-400">
