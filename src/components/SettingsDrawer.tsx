@@ -2,6 +2,7 @@
 
 /** 设置右侧抽屉：接口配置 + 用量台账（原 /settings 独立页改造，逻辑不变） */
 import { useEffect, useState } from "react";
+import PersonalSection from "./PersonalSection";
 
 type Settings = {
   baseUrl: string;
@@ -15,6 +16,7 @@ type Settings = {
   translateBaseUrl?: string;
   translateApiKey?: string;
   translateModel?: string;
+  userDirective?: string;
 };
 
 type TestResult = {
@@ -62,6 +64,7 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
   const [error, setError] = useState<string | null>(null);
   const [totals, setTotals] = useState<UsageTotals[]>([]);
   const [rows, setRows] = useState<UsageRow[]>([]);
+  const [tab, setTab] = useState<"model" | "personal">("model"); // 二段切换（自审裁决：页面原本无 Tab）
 
   // 打开时拉取配置与用量
   useEffect(() => {
@@ -198,8 +201,26 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
           </button>
         </div>
 
+        {/* Tab 切换 */}
+        <div className="flex gap-1 border-b border-neutral-200 px-5 pt-2">
+          {([['model', '模型接入'], ['personal', '个性化']] as const).map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setTab(k)}
+              className={`-mb-px rounded-t-md border-b-2 px-3 py-1.5 text-xs font-medium ${
+                tab === k
+                  ? 'border-neutral-900 text-neutral-900'
+                  : 'border-transparent text-neutral-400 hover:text-neutral-700'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         {/* 内容区（滚动） */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
+          {tab === "model" ? (
+            <>
           {/* 接口配置 */}
           <section>
             <h3 className="text-sm font-medium">接口配置</h3>
@@ -402,6 +423,10 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
               </>
             )}
           </section>
+            </>
+          ) : (
+            <PersonalSection />
+          )}
         </div>
       </div>
     </div>
