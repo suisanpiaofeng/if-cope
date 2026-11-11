@@ -43,7 +43,7 @@ try {
   assert.equal(getPromptOverride(K), null, "空格覆盖应清除");
   assert.equal(resolvePrompt(K, "fallback"), "fallback", "无覆盖应回 fallback");
   // 3c. PROMPT_DEFAULTS 5 个 key 齐全
-  for (const k of ["chat_append", "ask_system", "artifact_summary", "map_link"]) {
+  for (const k of ["chat_append", "ask_system", "artifact_summary", "map_link", "map_analyze", "map_merge", "map_repair"]) {
     assert.ok(k in PROMPT_DEFAULTS, `PROMPT_DEFAULTS 缺 ${k}`);
   }
   assert.equal(PROMPT_DEFAULTS.chat_append, "", "chat_append 默认应为空");

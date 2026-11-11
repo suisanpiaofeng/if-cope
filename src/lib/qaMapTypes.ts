@@ -254,3 +254,58 @@ export function qaMapToMarkdown(map: QaMapData): string {
   for (const n of map.nodes) walk(n, 0); // 兜底：环/断链也不丢卡
   return lines.join("\n");
 }
+
+/** 一键自动布局（分层）：按连线关系分层排列——根在左、子层向右、同层按原 y 保序。
+ *  纯函数不改入参；节点尺寸保留。孤立节点归根层排尾部。 */
+export function autoLayout(
+  nodes: QaMapNode[],
+  edges: QaMapEdge[],
+  opts?: { gapX?: number; gapY?: number }
+): QaMapNode[] {
+  const gapX = opts?.gapX ?? 90;
+  const gapY = opts?.gapY ?? 40;
+  if (nodes.length === 0) return nodes;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const incoming = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const e of edges) {
+    if (!byId.has(e.from) || !byId.has(e.to)) continue;
+    outgoing.set(e.from, [...(outgoing.get(e.from) ?? []), e.to]);
+    incoming.set(e.to, [...(incoming.get(e.to) ?? []), e.from]);
+  }
+  // 层号 = 沿入边的最长路径（根=0）；有环时用迭代松弛防死循环
+  const depth = new Map<string, number>(nodes.map((n) => [n.id, 0]));
+  for (let pass = 0; pass < nodes.length; pass++) {
+    let changed = false;
+    for (const n of nodes) {
+      const parents = incoming.get(n.id) ?? [];
+      const d = parents.length ? Math.max(...parents.map((p) => (depth.get(p) ?? 0) + 1)) : 0;
+      if (d !== depth.get(n.id)) {
+        depth.set(n.id, d);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  // 分层并按原 y 保序
+  const layers = new Map<number, QaMapNode[]>();
+  for (const n of nodes) {
+    const d = depth.get(n.id) ?? 0;
+    layers.set(d, [...(layers.get(d) ?? []), n]);
+  }
+  const maxW = Math.max(...nodes.map((n) => n.w ?? 340));
+  const maxH = Math.max(...nodes.map((n) => n.h ?? 280));
+  const out: QaMapNode[] = [];
+  for (const [d, layer] of [...layers.entries()].sort((a, b) => a[0] - b[0])) {
+    layer.sort((a, b) => a.y - b.y);
+    const totalH = layer.length * (maxH + gapY) - gapY;
+    layer.forEach((n, i) => {
+      out.push({
+        ...n,
+        x: d * (maxW + gapX),
+        y: i * (maxH + gapY) - totalH / 2 + maxH / 2,
+      });
+    });
+  }
+  return out;
+}

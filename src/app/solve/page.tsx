@@ -23,9 +23,12 @@ import FilesPanel from "@/components/FilesPanel";
 import QAMapCard, { type QaMapRFNode } from "@/components/qa-map/QAMapCard";
 import EdgesOverlay from "@/components/qa-map/EdgesOverlay";
 import EdgeDialog from "@/components/qa-map/EdgeDialog";
+import RepairDialog, { type RepairSuggestion } from "@/components/qa-map/RepairDialog";
+import AnalyzeDialog from "@/components/qa-map/AnalyzeDialog";
 import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
 import { DND_MIME, readDnd } from "@/lib/dnd";
 import {
+  autoLayout,
   edgeId,
   hasCycle,
   nextNodePosition,
@@ -80,6 +83,78 @@ export default function SolvePage() {
   } | null>(null);
   // 待确认的手动连线（弹窗填两端标注后才建边）
   const [pendingConn, setPendingConn] = useState<{ from: string; to: string } | null>(null);
+  // 删卡智能修复（B）：中间卡删除时的接续建议
+  const [repair, setRepair] = useState<{
+    node: QaMapNode;
+    upstream: QaMapNode[];
+    downstream: QaMapNode[];
+    suggestions: RepairSuggestion | null;
+  } | null>(null);
+  // AI 地图体检（A）
+  const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  // ── 撤销/重做（E）：每次有意义变更前快照 {nodes, edges}，Ctrl+Z/Y 或按钮回溯 ──
+  type Snap = { nodes: QaMapNode[]; edges: QaMapEdge[] };
+  const historyRef = useRef<{ past: Snap[]; future: Snap[] }>({ past: [], future: [] });
+  const [histVer, setHistVer] = useState(0); // 驱动撤销/重做按钮可用态刷新
+
+  const pushHistory = useCallback(() => {
+    const a = activeRef.current;
+    if (!a) return;
+    const h = historyRef.current;
+    h.past.push({ nodes: a.nodes, edges: a.edges ?? [] });
+    if (h.past.length > 50) h.past.shift();
+    h.future = [];
+    setHistVer((v) => v + 1);
+  }, []);
+
+  const undo = useCallback(() => {
+    const a = activeRef.current;
+    const h = historyRef.current;
+    if (!a || h.past.length === 0) return;
+    h.future.push({ nodes: a.nodes, edges: a.edges ?? [] });
+    const snap = h.past.pop()!;
+    patchActiveRef.current({ nodes: snap.nodes, edges: snap.edges });
+    setHistVer((v) => v + 1);
+  }, []);
+
+  const redo = useCallback(() => {
+    const a = activeRef.current;
+    const h = historyRef.current;
+    if (!a || h.future.length === 0) return;
+    h.past.push({ nodes: a.nodes, edges: a.edges ?? [] });
+    const snap = h.future.pop()!;
+    patchActiveRef.current({ nodes: snap.nodes, edges: snap.edges });
+    setHistVer((v) => v + 1);
+  }, []);
+
+  // 快捷键：Ctrl+Z 撤销 / Ctrl+Shift+Z 或 Ctrl+Y 重做（输入框内不拦截）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const mod = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
+      if (mod && k === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (mod && k === "y") {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
+
+  // 一键整理布局（G）：分层排列，可撤销
+  const applyAutoLayout = useCallback(() => {
+    const a = activeRef.current;
+    if (!a) return;
+    pushHistory();
+    patchActiveRef.current({ nodes: autoLayout(a.nodes, a.edges ?? []) });
+    setNotice("已按连线关系整理布局（Ctrl+Z 可撤销）");
+  }, [pushHistory]);
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -146,10 +221,46 @@ export default function SolvePage() {
         mapId?: number;
         node?: QaMapNode;
         links?: QaMapEdge[];
+        edges?: QaMapEdge[];
+        mapUpdated?: boolean;
+        cardUpdated?: boolean;
+        summary?: string;
         model?: string;
         autoRouted?: boolean;
       };
-      if (!res.ok || !d.node) throw new Error(d.error || "解答失败");
+      if (!res.ok || (!d.node && !d.mapUpdated && !d.cardUpdated)) throw new Error(d.error || "解答失败");
+      // ── 地图操作工具路径：整理连线（不生成新卡） ──
+      if (d.mapUpdated) {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.key === active.key ? { ...t, mapId: d.mapId ?? t.mapId, edges: d.edges ?? t.edges } : t
+          )
+        );
+        setNotice(d.summary || "已整理连线");
+        setImage(null);
+        setInput("");
+        return;
+      }
+      // ── 补充卡片路径：改写已有卡（不生成新卡） ──
+      if (d.cardUpdated && d.node) {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.key === active.key
+              ? {
+                  ...t,
+                  mapId: d.mapId ?? t.mapId,
+                  nodes: t.nodes.map((n) => (n.id === d.node!.id ? d.node! : n)),
+                  selectedId: d.node!.id,
+                }
+              : t
+          )
+        );
+        setNotice(d.summary || "已补充到卡片");
+        setImage(null);
+        setInput("");
+        return;
+      }
+      // ── 正常问答：生成新卡 ──
       setTabs((prev) =>
         prev.map((t) =>
           t.key === active.key
@@ -213,11 +324,140 @@ export default function SolvePage() {
   const onDelete = useCallback((node: QaMapNode) => {
     const a = activeRef.current;
     if (!a) return;
+    const edges = a.edges ?? [];
+    const upstream = a.nodes.filter((n) => edges.some((e) => e.to === node.id && e.from === n.id));
+    const downstream = a.nodes.filter((n) => edges.some((e) => e.from === node.id && e.to === n.id));
+    // 中间卡（有进有出）：AI 建议接续连线，防知识脉络断裂（用户功能 B）
+    if (upstream.length > 0 && downstream.length > 0) {
+      setRepair({ node, upstream, downstream, suggestions: null });
+      fetch("/api/qa-map/repair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ removed: node, upstream, downstream }),
+      })
+        .then((r) => r.json())
+        .then((d: RepairSuggestion) => setRepair((r) => (r ? { ...r, suggestions: d } : null)))
+        .catch(() => setRepair((r) => (r ? { ...r, suggestions: { links: [], summary: "" } } : null)));
+      return;
+    }
+    pushHistory();
     // 删节点及其全部入边/出边
     const next = a.nodes.filter((n) => n.id !== node.id);
-    const nextEdges = (a.edges ?? []).filter((e) => e.from !== node.id && e.to !== node.id);
+    const nextEdges = edges.filter((e) => e.from !== node.id && e.to !== node.id);
     patchActiveRef.current({ nodes: next, edges: nextEdges, selectedId: null });
-  }, []);
+  }, [pushHistory]);
+
+  // 删卡并接续（B）：删节点 + 落 AI 建议的上下游连线
+  const confirmRepair = useCallback(
+    (links: RepairSuggestion["links"]) => {
+      const r = repairRef.current;
+      const a = activeRef.current;
+      if (!r || !a) return;
+      pushHistory();
+      const nodes = a.nodes.filter((n) => n.id !== r.node.id);
+      let edges = (a.edges ?? []).filter((e) => e.from !== r.node.id && e.to !== r.node.id);
+      for (const l of links) {
+        if (!nodes.some((n) => n.id === l.from) || !nodes.some((n) => n.id === l.to)) continue;
+        if (edges.some((e) => e.from === l.from && e.to === l.to)) continue;
+        if (hasCycle(nodes, edges, l.from, l.to)) continue;
+        edges = [...edges, { id: edgeId(l.from, l.to), from: l.from, to: l.to, ...(l.relFrom ? { relFrom: l.relFrom } : {}), ...(l.relTo ? { relTo: l.relTo } : {}) }];
+      }
+      patchActiveRef.current({ nodes, edges, selectedId: null });
+      setRepair(null);
+      setNotice(`已删除并接续 ${links.length} 条连线（Ctrl+Z 可撤销）`);
+    },
+    [pushHistory]
+  );
+
+  const deleteOnly = useCallback(() => {
+    const r = repairRef.current;
+    const a = activeRef.current;
+    if (!r || !a) return;
+    pushHistory();
+    const nodes = a.nodes.filter((n) => n.id !== r.node.id);
+    const edges = (a.edges ?? []).filter((e) => e.from !== r.node.id && e.to !== r.node.id);
+    patchActiveRef.current({ nodes, edges, selectedId: null });
+    setRepair(null);
+  }, [pushHistory]);
+
+  // 体检连线修复（A）：增/删边，可撤销
+  const applyEdgeOps = useCallback(
+    (add: Array<{ from: string; to: string; relFrom?: string; relTo?: string }> | undefined, remove: string[]) => {
+      const a = activeRef.current;
+      if (!a) return;
+      pushHistory();
+      let edges = (a.edges ?? []).filter((e) => !remove.includes(e.id));
+      for (const op of add ?? []) {
+        if (!a.nodes.some((n) => n.id === op.from) || !a.nodes.some((n) => n.id === op.to)) continue;
+        if (hasCycle(a.nodes, edges, op.from, op.to)) continue;
+        const i = edges.findIndex((e) => e.from === op.from && e.to === op.to);
+        if (i >= 0) {
+          edges = edges.map((e, idx) =>
+            idx === i ? { ...e, ...(op.relFrom ? { relFrom: op.relFrom.slice(0, 40) } : {}), ...(op.relTo ? { relTo: op.relTo.slice(0, 40) } : {}) } : e
+          );
+        } else {
+          edges = [
+            ...edges,
+            {
+              id: edgeId(op.from, op.to),
+              from: op.from,
+              to: op.to,
+              ...(op.relFrom ? { relFrom: op.relFrom.slice(0, 40) } : {}),
+              ...(op.relTo ? { relTo: op.relTo.slice(0, 40) } : {}),
+            },
+          ];
+        }
+      }
+      patchActiveRef.current({ edges });
+      setNotice("已应用连线修复（Ctrl+Z 可撤销）");
+    },
+    [pushHistory]
+  );
+
+  // 重复卡合并（D）：AI 融合内容 + 边重定向到保留卡
+  const applyMerge = useCallback(
+    async (cardIds: string[]) => {
+      const a = activeRef.current;
+      if (!a || cardIds.length < 2) return;
+      const cards = a.nodes.filter((n) => cardIds.includes(n.id));
+      if (cards.length < 2) return;
+      setNotice("正在合并卡片…");
+      try {
+        const r = await fetch("/api/qa-map/merge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cards }),
+        });
+        const d = (await r.json()) as { title?: string; question?: string; answer?: string; summary?: string; error?: string };
+        if (!r.ok || d.error) throw new Error(d.error || "合并失败");
+        pushHistory();
+        const [keepId, ...removeIds] = cardIds;
+        const nodes = a.nodes
+          .filter((n) => !removeIds.includes(n.id))
+          .map((n) =>
+            n.id === keepId
+              ? { ...n, title: String(d.title ?? n.title).slice(0, 40), question: String(d.question ?? n.question), answer: String(d.answer ?? n.answer) }
+              : n
+          );
+        const seen = new Set<string>();
+        const edges: QaMapEdge[] = [];
+        for (const e of a.edges ?? []) {
+          const from = removeIds.includes(e.from) ? keepId : e.from;
+          const to = removeIds.includes(e.to) ? keepId : e.to;
+          if (from === to || !nodes.some((n) => n.id === from) || !nodes.some((n) => n.id === to)) continue;
+          const pair = `${from}->${to}`;
+          if (seen.has(pair)) continue;
+          seen.add(pair);
+          edges.push({ ...e, id: edgeId(from, to), from, to });
+        }
+        patchActiveRef.current({ nodes, edges, selectedId: keepId });
+        setNotice(`${d.summary || "已合并卡片"}（Ctrl+Z 可撤销）`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [pushHistory]
+  );
 
   // ── 受控节点：只应用拖动 position（实时跟手，不落库）。
   //    不接 onNodesChange 拖动会让卡片消失（历史 bug）；
@@ -263,15 +503,19 @@ export default function SolvePage() {
     setPendingConn({ from: conn.source, to: conn.target });
   }, []);
 
-  // ── 弹窗确认：追加边（两端标注可留空） ──
+  // ── 弹窗确认：追加边（标注留空则 AI 异步补生成） ──
   const pendingConnRef = useRef<{ from: string; to: string } | null>(null);
   pendingConnRef.current = pendingConn;
+  const repairRef = useRef<typeof repair>(null);
+  repairRef.current = repair;
   const confirmEdge = useCallback((relFrom: string, relTo: string) => {
     const pc = pendingConnRef.current;
     const a = activeRef.current;
     if (!pc || !a) return;
+    const eid = edgeId(pc.from, pc.to);
+    pushHistory();
     const e: QaMapEdge = {
-      id: edgeId(pc.from, pc.to),
+      id: eid,
       from: pc.from,
       to: pc.to,
       ...(relFrom.trim() ? { relFrom: relFrom.trim().slice(0, 40) } : {}),
@@ -279,6 +523,35 @@ export default function SolvePage() {
     };
     patchActiveRef.current({ edges: [...(a.edges ?? []), e] });
     setPendingConn(null);
+    // 标注留空 → AI 异步补生成（失败保持无标注，边仍可点选/编辑/删除）
+    if (!relFrom.trim() || !relTo.trim()) {
+      const fromNode = a.nodes.find((n) => n.id === pc.from);
+      const toNode = a.nodes.find((n) => n.id === pc.to);
+      if (fromNode && toNode) {
+        setNotice("已建立连线，AI 正在生成标注…");
+        fetch("/api/qa-map/labels", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ from: fromNode, to: toNode }),
+        })
+          .then((r) => r.json())
+          .then((d: { relFrom?: string; relTo?: string }) => {
+            patchActiveRef.current({
+              edges: (activeRef.current?.edges ?? []).map((x) =>
+                x.id === eid
+                  ? {
+                      ...x,
+                      ...(d.relFrom && !x.relFrom ? { relFrom: d.relFrom } : {}),
+                      ...(d.relTo && !x.relTo ? { relTo: d.relTo } : {}),
+                    }
+                  : x
+              ),
+            });
+            setNotice("AI 标注已生成（不满意可点标注修改）");
+          })
+          .catch(() => setNotice("AI 标注生成失败，可点边手动填写"));
+      }
+    }
   }, []);
 
   // ── 点边端：两端标注独立编辑（点哪端改哪端）/ 断开 ──
@@ -286,6 +559,7 @@ export default function SolvePage() {
     if (!selectedEdge) return;
     const { edgeId: eid, end, draft } = selectedEdge;
     const value = draft.trim().slice(0, 40);
+    pushHistory();
     patchActive({
       edges: (active.edges ?? []).map((e) =>
         e.id === eid ? (end === "from" ? { ...e, relFrom: value || undefined } : { ...e, relTo: value || undefined }) : e
@@ -296,6 +570,7 @@ export default function SolvePage() {
 
   const disconnectEdge = useCallback(() => {
     if (!selectedEdge) return;
+    pushHistory();
     patchActive({
       edges: (active.edges ?? []).filter((e) => e.id !== selectedEdge.edgeId),
     });
@@ -626,6 +901,34 @@ export default function SolvePage() {
             placeholder="地图标题"
           />
           <span className="num shrink-0 text-[10px] text-neutral-400">{saveState}</span>
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              onClick={undo}
+              disabled={historyRef.current.past.length === 0}
+              title="撤销（Ctrl+Z）"
+              className="border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-30">
+              ↩
+            </button>
+            <button
+              onClick={redo}
+              disabled={historyRef.current.future.length === 0}
+              title="重做（Ctrl+Y）"
+              className="border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-30">
+              ↪
+            </button>
+            <button
+              onClick={applyAutoLayout}
+              title="按连线关系分层排列全部卡片（可撤销）"
+              className="border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50">
+              ⊹ 整理布局
+            </button>
+            <button
+              onClick={() => setAnalyzeOpen(true)}
+              title="AI 诊断孤立卡/重复卡/断链并一键修复"
+              className="border border-emerald-600 px-2.5 py-1 text-xs text-emerald-700 hover:bg-emerald-50">
+              ◎ AI 体检
+            </button>
+          </div>
           <button onClick={() => download("md")} className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50">
             导出 MD
           </button>
@@ -705,6 +1008,30 @@ export default function SolvePage() {
                 to={pendingConn.to}
                 onCancel={() => setPendingConn(null)}
                 onConfirm={confirmEdge}
+              />
+            )}
+
+            {/* 删卡智能修复弹窗（B）：中间卡删除时 AI 建议接续 */}
+            {repair && (
+              <RepairDialog
+                node={repair.node}
+                upstream={repair.upstream}
+                downstream={repair.downstream}
+                suggestions={repair.suggestions}
+                onConfirmRepair={confirmRepair}
+                onDeleteOnly={deleteOnly}
+                onCancel={() => setRepair(null)}
+              />
+            )}
+
+            {/* AI 地图体检弹窗（A）：诊断 + 一键修复 */}
+            {analyzeOpen && (
+              <AnalyzeDialog
+                nodes={active?.nodes ?? []}
+                edges={active?.edges ?? []}
+                onApplyEdgeOps={applyEdgeOps}
+                onMerge={(ids) => void applyMerge(ids)}
+                onClose={() => setAnalyzeOpen(false)}
               />
             )}
 

@@ -12,6 +12,7 @@ import { resolvePrompt, PROMPT_DEFAULTS } from "@/lib/prompts";
 import {
   ancestorChain,
   edgeId,
+  hasCycle,
   nextNodePosition,
   normalizeQaMap,
   type QaMapData,
@@ -20,12 +21,77 @@ import {
   type QaMapNode,
 } from "@/lib/qaMapTypes";
 import { webSearch, webHitsToContext, type WebHit } from "@/lib/webSearch";
+import { cleanLabel, decideLinks, type LinkResult } from "@/lib/qaMapLink";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 
 
+
+/** 地图操作工具（规格 §3：模型自主决策——整理连线 / 补充卡片 / 正常问答） */
+const MAP_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "update_map_edges",
+      description:
+        "整理知识地图连线（增/删/改连线标注）。当学生要求梳理、整理、优化、重构、修改连线或关系标注时调用；调用后不再生成新卡片。",
+      parameters: {
+        type: "object",
+        properties: {
+          add: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                from: { type: "string", description: "源卡 id" },
+                to: { type: "string", description: "目标卡 id" },
+                relFrom: { type: "string", description: "目标卡相对源卡的标注（内容型：类型：内容特征，可留空）" },
+                relTo: { type: "string", description: "源卡相对目标卡的标注（可留空）" },
+              },
+              required: ["from", "to"],
+            },
+          },
+          remove: { type: "array", items: { type: "string" }, description: "要删除的边 id（格式 from->to）" },
+          summary: { type: "string", description: "本次改动的一句话说明（给学生看）" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_card",
+      description:
+        "把新内容补充进某张已有卡片（当新问题与某张卡联系极其紧密、属于同一知识点的延伸补充时调用）；调用后不再生成新卡片。",
+      parameters: {
+        type: "object",
+        properties: {
+          cardId: { type: "string", description: "目标卡片 id" },
+          content: { type: "string", description: "补充/改写的内容（markdown）" },
+          mode: { type: "string", enum: ["append", "revise"], description: "append=追加到该卡回答尾部；revise=替换整篇回答" },
+          summary: { type: "string", description: "一句话说明" },
+        },
+        required: ["cardId", "content", "summary"],
+      },
+    },
+  },
+];
+
+/** 地图结构摘要（供模型决策：连线/改卡/新建） */
+function mapStructureText(map: QaMapData): string {
+  const edges = map.edges ?? [];
+  const cards = map.nodes
+    .slice(0, 40)
+    .map((n) => `${n.id}｜${n.title}｜${n.question.slice(0, 50)}`)
+    .join("\n");
+  const links = edges
+    .slice(0, 60)
+    .map((e) => `${e.from}->${e.to}（${e.relFrom ?? "-"}/${e.relTo ?? "-"}）`)
+    .join("\n");
+  return `\n\n当前地图结构（${map.nodes.length} 张卡，${edges.length} 条连线）：\n卡片：\n${cards}\n连线（from->to）：\n${links || "（无）"}\n操作说明：若学生的要求是整理/修改连线 → 调用 update_map_edges；若新内容与某张已有卡联系极其紧密、应补充进那张卡 → 调用 update_card；否则正常回答（将生成新卡片）。`;
+}
 
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as {
@@ -107,20 +173,33 @@ export async function POST(req: NextRequest) {
       const userContent: Array<Record<string, unknown>> = [
         {
           type: "text",
-          text: `学生提问：${q}${hits.length ? `\n\n资料片段：\n${buildContextBlocks(hits).join("\n\n")}` : "\n\n（未检索到相关资料，按通用知识回答）"}${webHits.length ? `\n\n${webHitsToContext(webHits)}` : ""}`,
+          text: `学生提问：${q}${hits.length ? `\n\n资料片段：\n${buildContextBlocks(hits).join("\n\n")}` : "\n\n（未检索到相关资料，按通用知识回答）"}${webHits.length ? `\n\n${webHitsToContext(webHits)}` : ""}${map ? mapStructureText(map) : ""}`,
         },
       ];
       if (body.image) userContent.push({ type: "image_url", image_url: { url: body.image } });
 
-      const res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
+      const withTools = Boolean(map && map.nodes.length > 0);
+      const reqBody: Record<string, unknown> = {
+        model: s.chatModel,
+        messages: [{ role: "system", content: resolvePrompt("ask_system", PROMPT_DEFAULTS.ask_system) }, ...history, { role: "user", content: userContent }],
+        temperature: 0.3,
+        ...(withTools ? { tools: MAP_TOOLS, tool_choice: "auto" } : {}),
+      };
+      let res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
         method: "POST",
         headers: modelHeaders(s.apiKey),
-        body: JSON.stringify({
-          model: s.chatModel,
-          messages: [{ role: "system", content: resolvePrompt("ask_system", PROMPT_DEFAULTS.ask_system) }, ...history, { role: "user", content: userContent }],
-          temperature: 0.3,
-        }),
+        body: JSON.stringify(reqBody),
       });
+      // 上游不支持 tools 参数时降级：去掉 tools 重试一次（不支持 function calling 的模型走旧路径）
+      if (!res.ok && withTools && (res.status === 400 || res.status === 422)) {
+        delete reqBody.tools;
+        delete reqBody.tool_choice;
+        res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
+          method: "POST",
+          headers: modelHeaders(s.apiKey),
+          body: JSON.stringify(reqBody),
+        });
+      }
       if (!res.ok) {
         const errBody = await res.text().catch(() => "");
         if (body.image && (res.status === 400 || res.status === 422)) {
@@ -130,12 +209,84 @@ export async function POST(req: NextRequest) {
       }
       const data = (await res.json()) as {
         usage?: { prompt_tokens?: number; completion_tokens?: number };
-        choices: Array<{ message: { content: string } }>;
+        choices: Array<{
+          message: {
+            content: string | null;
+            tool_calls?: Array<{ function: { name: string; arguments: string } }>;
+          };
+        }>;
       };
-      answer = (data.choices?.[0]?.message?.content ?? "").trim();
-      if (!answer) throw new Error("模型返回了空内容");
+      const msg = data.choices?.[0]?.message;
       model = s.chatModel;
-      recordUsage("ask", s.chatModel, data.usage?.prompt_tokens ?? 0, data.usage?.completion_tokens ?? estimateTokens(answer));
+      recordUsage(
+        "ask",
+        s.chatModel,
+        data.usage?.prompt_tokens ?? 0,
+        data.usage?.completion_tokens ?? estimateTokens(msg?.content ?? "")
+      );
+
+      // ── 地图操作工具：模型自主决策整理连线 / 补充卡片（不生成新卡） ──
+      const tc = msg?.tool_calls?.[0];
+      if (tc && map && body.mapId != null) {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(tc.function.arguments || "{}");
+        } catch {
+          /* 参数损坏走 fallback */
+        }
+        const summary = String(args.summary ?? "已按要求整理。").slice(0, 120);
+        if (tc.function.name === "update_map_edges") {
+          const nodeIds = new Set(map.nodes.map((n) => n.id));
+          const nextEdges = [...(map.edges ?? [])];
+          // remove：按边 id 删
+          for (const rid of (args.remove as string[] | undefined) ?? []) {
+            const i = nextEdges.findIndex((e) => e.id === String(rid));
+            if (i >= 0) nextEdges.splice(i, 1);
+          }
+          // add：同向已存在则更新标注（兼做改标注）；防环/自环/悬空拒绝
+          for (const a of (args.add as Array<Record<string, unknown>> | undefined) ?? []) {
+            const from = String(a.from ?? "");
+            const to = String(a.to ?? "");
+            if (!nodeIds.has(from) || !nodeIds.has(to) || from === to) continue;
+            if (hasCycle(map.nodes, nextEdges, from, to)) continue;
+            const relFrom = cleanLabel(a.relFrom);
+            const relTo = cleanLabel(a.relTo);
+            const i = nextEdges.findIndex((e) => e.from === from && e.to === to);
+            if (i >= 0) {
+              nextEdges[i] = {
+                ...nextEdges[i],
+                ...(relFrom ? { relFrom } : {}),
+                ...(relTo ? { relTo } : {}),
+              };
+            } else {
+              nextEdges.push({
+                id: edgeId(from, to),
+                from,
+                to,
+                ...(relFrom ? { relFrom } : {}),
+                ...(relTo ? { relTo } : {}),
+              });
+            }
+          }
+          map.edges = nextEdges;
+          db.prepare("UPDATE artifacts SET content = ? WHERE id = ?").run(JSON.stringify(map), body.mapId);
+          return NextResponse.json({ mapId: body.mapId, mapUpdated: true, summary, edges: nextEdges, model, webUsed: webHits.length > 0 });
+        }
+        if (tc.function.name === "update_card") {
+          const cardId = String(args.cardId ?? "");
+          const node = map.nodes.find((n) => n.id === cardId);
+          const content = String(args.content ?? "").trim();
+          if (node && content) {
+            node.answer = args.mode === "revise" ? content : `${node.answer}\n\n---\n\n**补充：**\n${content}`;
+            db.prepare("UPDATE artifacts SET content = ? WHERE id = ?").run(JSON.stringify(map), body.mapId);
+            return NextResponse.json({ mapId: body.mapId, cardUpdated: true, summary, node, model, webUsed: webHits.length > 0 });
+          }
+        }
+        // 工具执行失败：落回正常问答（不丢回答）
+      }
+
+      answer = (msg?.content ?? "").trim();
+      if (!answer) throw new Error("模型返回了空内容");
     }
 
     // ── 引用过滤：只保留回答里真正用 [n] 标注过的出处，一个没标就零引用 ──
@@ -190,7 +341,7 @@ export async function POST(req: NextRequest) {
     if (map && savedMapId != null) {
       map.nodes.push(node);
       map.edges.push(...newEdges);
-      db.prepare("UPDATE artifacts SET content = ? WHERE id = ?").run(JSON.stringify(map), savedMapId);
+      db.prepare("UPDATE artifacts SET content = ? WHERE id = ?").run(JSON.stringify(map), body.mapId);
     } else {
       const title = node.title.slice(0, 40);
       const info = db
@@ -207,94 +358,6 @@ export async function POST(req: NextRequest) {
   }
 }
 
-type LinkResult = { to: string; relFrom: string; relTo: string };
-
-/** 从模型输出提取 links JSON：剥代码栅栏 → 整体解析 → 锚定 "links" 非贪婪提取。
- *  不能用贪婪 \{[\s\S]*\}——推理型模型的 reasoning 里含杂字符会拼出非法 JSON（2026-11-11 实测）。 */
-function extractLinksJson(text: string): { links?: Array<{ to?: unknown; relFrom?: unknown; relTo?: unknown }> } | null {
-  const cleaned = text.replace(/```(?:json)?/g, "").trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    /* 继续尝试子串提取 */
-  }
-  const m = cleaned.match(/\{\s*"links"[\s\S]*?\]\s*\}/);
-  if (m) {
-    try {
-      return JSON.parse(m[0]);
-    } catch {
-      /* 提取失败 */
-    }
-  }
-  // 兑底：reasoning 被截断时逐个提取 link 对象（容忍尾部残缺）
-  const links: Array<{ to: unknown; relFrom: unknown; relTo: unknown }> = [];
-  for (const lm of cleaned.matchAll(/\{\s*"to"\s*:\s*"([^"]+)"\s*,\s*"relFrom"\s*:\s*"([^"]*)"\s*,\s*"relTo"\s*:\s*"([^"]*)"/g)) {
-    links.push({ to: lm[1], relFrom: lm[2], relTo: lm[3] });
-  }
-  return links.length ? { links } : null;
-}
-
-const GENERIC_LABEL = /^(追问|追问延伸|延伸|相关|关联|依据|上文依据)$/;
-
-/** 内容型标注清洗：截 20 字；纯通用词置空（不显示标注，不灌水） */
-function cleanLabel(v: unknown): string {
-  const t = String(v ?? "").trim().slice(0, 20);
-  return GENERIC_LABEL.test(t) ? "" : t;
-}
-
-/** 一次调用：连线判断 + 两端内容型标注（替代旧 decideParent + describeRelation 两次调用）。
- *  forcedTo = 追问场景固定连线目标；links 上限 3、to 校验、温度 0；失败/未配模型时：
- *  追问场景仍建边（标注留空），新话题不乱连。 */
-async function decideLinks(q: string, nodes: QaMapNode[], forcedTo?: string): Promise<LinkResult[]> {
-  const FALLBACK: LinkResult[] = forcedTo ? [{ to: forcedTo, relFrom: "", relTo: "" }] : [];
-  const s = getSettings();
-  if (!isModelConfigured(s)) return FALLBACK;
-  try {
-    const cardList = nodes
-      .map((n) => `${n.id}｜${n.title}｜${n.question.slice(0, 60)}｜${n.answer.replace(/\s+/g, " ").slice(0, 80)}`)
-      .join("\n");
-    const res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
-      method: "POST",
-      headers: modelHeaders(s.apiKey),
-      body: JSON.stringify({
-        model: s.chatModel,
-        messages: [
-          { role: "system", content: resolvePrompt("map_link", PROMPT_DEFAULTS.map_link) },
-          {
-            role: "user",
-            content: `新问题：${q || "（图片提问）"}\n\n已有卡片：\n${cardList}${forcedTo ? `\n\n必须连至：${forcedTo}` : ""}`,
-          },
-        ],
-        temperature: 0,
-        max_tokens: 8000, // 推理型模型 reasoning_content 占预算且长度波动大，400/2000 都被思考吃光过（2026-11-11 实测）
-      }),
-    });
-    if (!res.ok) return FALLBACK;
-    const data = (await res.json()) as {
-      choices: Array<{ message: { content?: string; reasoning_content?: string } }>;
-    };
-    const msg = data.choices?.[0]?.message;
-    const parsed =
-      extractLinksJson(msg?.content ?? "") ?? extractLinksJson(msg?.reasoning_content ?? "");
-    if (!parsed) {
-      console.log("[map_link] JSON 解析失败 | content:", JSON.stringify(msg?.content ?? "").slice(0, 300));
-      return FALLBACK;
-    }
-    const validIds = new Set(nodes.map((n) => n.id));
-    const out: LinkResult[] = [];
-    const seen = new Set<string>();
-    for (const l of parsed.links ?? []) {
-      const to = String(l.to ?? "");
-      if (!validIds.has(to) || seen.has(to) || out.length >= 3) continue;
-      if (forcedTo && to !== forcedTo) continue;
-      seen.add(to);
-      out.push({ to, relFrom: cleanLabel(l.relFrom), relTo: cleanLabel(l.relTo) });
-    }
-    return out.length ? out : FALLBACK;
-  } catch {
-    return FALLBACK;
-  }
-}
 
 function mockAnswer(q: string, depth: number): string {
   return [

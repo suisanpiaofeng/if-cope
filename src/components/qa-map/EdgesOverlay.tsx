@@ -30,6 +30,10 @@ export default function EdgesOverlay({
   if (live.length === 0) return null;
 
   const toScreen = (wx: number, wy: number) => ({ sx: wx * zoom + x, sy: wy * zoom + y });
+  // 徽标随缩放自适应：缩放 ≥0.8 保持固定大小（日常阅读友好）；
+  // 0.4~0.8 按比例缩小；<0.4 完全隐藏（缩小拖拽时标签不挡视野，线仍可点选）
+  const badgeScale = zoom >= 0.8 ? 1 : Math.max(0.45, zoom / 0.8);
+  const showBadges = zoom >= 0.4;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-[5]">
@@ -47,7 +51,20 @@ export default function EdgesOverlay({
           const sel = selectedEdgeId === e.id;
           return (
             <g key={e.id}>
-              <path d={d} fill="none" stroke={sel ? "#737373" : "#d4d4d4"} strokeWidth={sel ? 2 : 1.5} />
+              {/* 命中区加宽的透明线：无标注的边也能点选（
+                  2026-11-11 用户反馈：空标注边看得见摸不着） */}
+              <path
+                d={d}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={14}
+                className="pointer-events-auto cursor-pointer"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  onEdgeClick?.(e.id, "from");
+                }}
+              />
+              <path d={d} fill="none" stroke={sel ? "#737373" : "#d4d4d4"} strokeWidth={sel ? 2 : 1.5} className="pointer-events-none" />
               <polygon
                 points="0,0 -9,-4.5 -9,4.5"
                 fill={sel ? "#737373" : "#d4d4d4"}
@@ -58,8 +75,9 @@ export default function EdgesOverlay({
         })}
       </svg>
 
-      {/* 两端标注徽标（挂边 id；空标注不渲染；截 20 字 + 悬停全文） */}
-      {live.map((e) => {
+      {/* 两端标注徽标（挂边 id；空标注不渲染；截 20 字 + 悬停全文；随缩放自适应） */}
+      {showBadges &&
+        live.map((e) => {
         const p = byId.get(e.from)!;
         const c = byId.get(e.to)!;
         const toRight = c.x > p.x;
@@ -77,7 +95,12 @@ export default function EdgesOverlay({
                 ev.stopPropagation();
                 onEdgeClick?.(e.id, end);
               }}
-              style={{ position: "absolute", left: sx, top: sy, transform: "translate(-50%, -50%)" }}
+              style={{
+                position: "absolute",
+                left: sx,
+                top: sy,
+                transform: `translate(-50%, -50%) scale(${badgeScale})`,
+              }}
               className={`pointer-events-auto max-w-[180px] truncate rounded-sm border px-1.5 py-0.5 text-[10px] leading-3 shadow-sm transition-colors ${
                 isSel
                   ? "border-neutral-900 bg-neutral-900 text-white"

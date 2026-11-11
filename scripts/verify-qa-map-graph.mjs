@@ -7,6 +7,7 @@ import {
   ancestorChain,
   hasCycle,
   nextNodePosition,
+  autoLayout,
 } from "../src/lib/qaMapTypes.ts";
 
 const node = (id, extra = {}) => ({
@@ -110,3 +111,28 @@ const node = (id, extra = {}) => ({
 }
 
 console.log("verify-qa-map-graph: all pass");
+
+// 7. autoLayout：菱形分层 [a][b,c][d]；同层按原 y 保序；入参不改
+{
+  const nodes = [
+    { id: "d", round: 3, title: "d", question: "q", answer: "a", x: 999, y: 500, w: 340, h: 280 },
+    { id: "c", round: 2, title: "c", question: "q", answer: "a", x: 500, y: 100, w: 340, h: 280 },
+    { id: "b", round: 2, title: "b", question: "q", answer: "a", x: 500, y: 50, w: 340, h: 280 },
+    { id: "a", round: 1, title: "a", question: "q", answer: "a", x: 0, y: 0, w: 340, h: 280 },
+  ];
+  const edges = [
+    { id: "a->b", from: "a", to: "b" },
+    { id: "a->c", from: "a", to: "c" },
+    { id: "b->d", from: "b", to: "d" },
+    { id: "c->d", from: "c", to: "d" },
+  ];
+  const snapshot = JSON.stringify(nodes);
+  const out = autoLayout(nodes, edges);
+  assert.equal(JSON.stringify(nodes), snapshot, "autoLayout 不应改入参");
+  const x = (id) => out.find((n) => n.id === id).x;
+  assert.ok(x("a") < x("b") && x("a") < x("c") && x("b") < x("d"), "菱形应分层：a 最左 d 最右");
+  assert.equal(x("b"), x("c"), "b/c 同层 x 相同");
+  const y = (id) => out.find((n) => n.id === id).y;
+  assert.ok(y("b") < y("c"), "同层按原 y 保序（b 原 y=50 在 c 前）");
+}
+console.log("verify-qa-map-graph: layout done");

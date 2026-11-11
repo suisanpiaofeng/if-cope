@@ -17,6 +17,9 @@ const PROMPT_LABELS: Record<string, string> = {
   ask_system: "解题答疑",
   artifact_summary: "复习笔记生成",
   map_link: "知识连线（路由+标注）",
+  map_analyze: "知识地图体检",
+  map_merge: "知识卡合并",
+  map_repair: "连线修复",
 };
 
 export default function PersonalSection() {
