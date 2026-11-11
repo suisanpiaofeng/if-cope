@@ -4,6 +4,8 @@
  * 单一数据源 = data/skills/<name>/SKILL.md；技能只是指令，不执行任何代码。
  * 本文件 Task 1 先落解析层（纯函数，可被 verify 直测）；IO 层 Task 2 追加。
  */
+import fs from "node:fs";
+import path from "node:path";
 
 export const BODY_MAX = 8000;
 export const DESC_MAX = 300;
@@ -65,4 +67,91 @@ export function buildSkillsIndexText(skills: ParsedSkill[]): string {
     "</skills>",
   ];
   return lines.join("\n");
+}
+
+// ── IO 层（Task 2）：data/skills/<name>/SKILL.md 单一数据源 ──
+
+/** 技能根目录：env 覆盖供 verify 测试隔离；默认 data/skills */
+export function skillsDir(): string {
+  return process.env.IFCOPE_SKILLS_DIR ?? path.join(process.cwd(), "data", "skills");
+}
+
+/** 解析技能目录绝对路径；名称非法或越界 throw（路径穿越双保险） */
+function resolveSkillDir(name: string): string {
+  if (!isValidSkillName(name)) throw new Error(`非法技能名：「${name}」`);
+  const root = path.resolve(skillsDir());
+  const dir = path.resolve(root, name);
+  if (!dir.startsWith(root + path.sep)) throw new Error(`非法技能名：「${name}」`);
+  return dir;
+}
+
+/** 播种示例技能：只看 .seeded 标记，只播一次（UI 删除后不复活） */
+export function ensureSeedSkills(): void {
+  const root = skillsDir();
+  const marker = path.join(root, ".seeded");
+  if (fs.existsSync(marker)) return;
+  fs.mkdirSync(root, { recursive: true });
+  writeSkill(
+    "exam-plan",
+    "生成复习计划/备考安排时使用（当学生问“怎么复习”“帮我排计划”“期末怎么准备”）",
+    `# 复习计划制定
+
+按以下步骤为学生制定复习计划：
+
+1. **诊断现状**：明确考试科目、考试时间、当前掌握程度（资料库有相关资料时用 list_library / read_source 了解内容）
+2. **拆分阶段**：按周拆分——基础回顾 / 重点强化 / 真题演练 / 考前收心，各阶段给出天数
+3. **每日任务**：每阶段列出具体每日任务（科目 + 内容 + 时长），总量控制在学生可执行范围
+4. **复盘节奏**：约定复盘点（如每周日晚回顾完成率），给出调整规则
+5. **输出格式**：用表格呈现每日任务，结尾给一句鼓励和首要行动
+
+约束：计划基于学生真实时间，不要假设每天 8 小时；缺关键信息先问，不编造考试信息。`
+  );
+  fs.writeFileSync(marker, "");
+}
+
+/** 全部技能（含坏文件 error 条目）；每次重扫目录（文件即真源，无缓存失效问题） */
+export function listSkills(): ParsedSkill[] {
+  ensureSeedSkills();
+  const root = skillsDir();
+  if (!fs.existsSync(root)) return [];
+  const out: ParsedSkill[] = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory()) continue;
+    const file = path.join(root, entry.name, "SKILL.md");
+    if (!fs.existsSync(file)) continue;
+    out.push(parseSkillFile(fs.readFileSync(file, "utf8"), entry.name));
+  }
+  return out;
+}
+
+/** 读技能正文；不存在/禁用/坏文件 throw（中文信息含原因） */
+export function readSkillBody(name: string): string {
+  const dir = resolveSkillDir(name);
+  const file = path.join(dir, "SKILL.md");
+  if (!fs.existsSync(file)) throw new Error(`技能「${name}」不存在`);
+  const skill = parseSkillFile(fs.readFileSync(file, "utf8"), name);
+  if (skill.error) throw new Error(`技能「${name}」不可用：${skill.error}`);
+  if (!skill.enabled) throw new Error(`技能「${name}」已禁用`);
+  return skill.body;
+}
+
+/** 写技能（幂等覆盖）；name 非法 throw */
+export function writeSkill(name: string, description: string, body: string, enabled: boolean = true): void {
+  const dir = resolveSkillDir(name);
+  fs.mkdirSync(dir, { recursive: true });
+  const text = `---\nname: ${name}\ndescription: ${String(description ?? "").replace(/\r?\n/g, " ").trim()}\nenabled: ${enabled ? "true" : "false"}\n---\n${String(body ?? "").trim()}\n`;
+  fs.writeFileSync(path.join(dir, "SKILL.md"), text);
+}
+
+/** 删技能目录；不存在返回 false（路由据此 404）；name 非法 throw */
+export function deleteSkill(name: string): boolean {
+  const dir = resolveSkillDir(name);
+  if (!fs.existsSync(dir)) return false;
+  fs.rmSync(dir, { recursive: true, force: true });
+  return true;
+}
+
+/** 可用技能的索引段（注入系统提示）；无可用技能返回 "" */
+export function skillsIndexText(): string {
+  return buildSkillsIndexText(listSkills());
 }
