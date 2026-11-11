@@ -15,6 +15,8 @@ export type ParsedSkill = {
   description: string;
   enabled: boolean;
   body: string;
+  triggers?: string;
+  params?: string;
   error?: string;
 };
 
@@ -53,7 +55,7 @@ export function parseSkillFile(text: string, dirName: string): ParsedSkill {
   const description = meta.description ?? "";
   const enabled = (meta.enabled ?? "true").trim().toLowerCase() !== "false";
   const body = lines.slice(end + 1).join("\n").trim();
-  return { name: String(dirName), description, enabled, body };
+  return { name: String(dirName), description, enabled, body, triggers: meta.triggers, params: meta.params };
 }
 
 /** 索引段文本（注入系统提示）：只收 enabled && !error；无可用技能返回 "" */
@@ -166,11 +168,24 @@ export function readSkillBody(name: string): string {
   return skill.body;
 }
 
-/** 写技能（幂等覆盖）；name 非法 throw */
-export function writeSkill(name: string, description: string, body: string, enabled: boolean = true): void {
+/** 写技能（幂等覆盖）；name 非法 throw；triggers/params 可选写入 frontmatter */
+export function writeSkill(
+  name: string,
+  description: string,
+  body: string,
+  enabled: boolean = true,
+  extra?: { triggers?: string; params?: string }
+): void {
   const dir = resolveSkillDir(name);
   fs.mkdirSync(dir, { recursive: true });
-  const text = `---\nname: ${name}\ndescription: ${String(description ?? "").replace(/\r?\n/g, " ").trim()}\nenabled: ${enabled ? "true" : "false"}\n---\n${String(body ?? "").trim()}\n`;
+  const metaLines = [
+    `name: ${name}`,
+    `description: ${String(description ?? "").replace(/\r?\n/g, " ").trim()}`,
+    `enabled: ${enabled ? "true" : "false"}`,
+  ];
+  if (extra?.triggers?.trim()) metaLines.push(`triggers: ${extra.triggers.trim()}`);
+  if (extra?.params?.trim()) metaLines.push(`params: ${extra.params.trim()}`);
+  const text = `---\n${metaLines.join("\n")}\n---\n${String(body ?? "").trim()}\n`;
   fs.writeFileSync(path.join(dir, "SKILL.md"), text);
 }
 
