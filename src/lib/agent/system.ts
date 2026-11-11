@@ -3,6 +3,24 @@ import { TOOLS } from "./tools";
 import type { TodoItem } from "./todo";
 import { resolvePrompt } from "../prompts";
 import { skillsIndexText } from "./skills";
+import { workspaceRoot, listFilesTree } from "./workspace";
+import fs from "node:fs";
+import path from "node:path";
+
+/** 工作区上下文（harness P0 §3.1/§3.4）：root + 文件树摘要 + .ifcope/AGENTS.md 项目配置 */
+function buildWorkspaceSection(): string {
+  const root = workspaceRoot();
+  const tree = listFilesTree("", 2);
+  const shown = tree.slice(0, 80);
+  const lines = shown.map((n) => `${n.type === "dir" ? "[D]" : "   "} ${n.path}${n.type === "dir" ? "/" : ""}`);
+  const more = tree.length > 80 ? `\n…共 ${tree.length} 项` : "";
+  let agents = "";
+  const agentsPath = path.join(root, ".ifcope", "AGENTS.md");
+  try {
+    if (fs.existsSync(agentsPath)) agents = `\n\n【项目配置 .ifcope/AGENTS.md（学生自定义，自动加载）】\n${fs.readFileSync(agentsPath, "utf8").slice(0, 2000)}`;
+  } catch { /* 配置读取失败不阻塞对话 */ }
+  return `<workspace>\n工作区根目录：${root}\n文件树（深度 2）：\n${lines.join("\n") || "（空工作区）"}${more}${agents}\n</workspace>`;
+}
 
 /** 环境自知的系统提示词：告诉模型"你运行在哪、这个应用是什么、有哪些模块"，
  *  并注入实时资料库状态（类目/资料/产物 + 本次对话选中的资料）。
@@ -10,6 +28,7 @@ import { skillsIndexText } from "./skills";
 
 export function buildSystemPrompt(selectedSourceIds: number[], todos: TodoItem[] = [], userSection: string = ""): string {
   const skillsText = skillsIndexText();
+  const workspaceText = buildWorkspaceSection();
   return `你是 IF.Cope 的内置 AI 助手，运行在一个校园 AI 学习工作站应用里。你不仅能答疑，还能通过工具直接操作这个应用。
 
 ## 应用结构（IF.Cope）
@@ -27,6 +46,7 @@ export function buildSystemPrompt(selectedSourceIds: number[], todos: TodoItem[]
 ${listToolsText()}
 调用原则：
 - 学生让你**移动/归类/生成笔记/查看库结构/读某份资料全文**时，直接调用工具执行，不要只给操作指引。
+- **文件/代码/命令类任务**（写代码、改文件、查代码、跑命令）直接用 list_files / read_file / write_file / edit_file / search_code / run_command 在工作区完成，不要只给文字教程。
 - 问题**带时效性**（新闻/最新/进展/汇率/今天几号等）或**资料库完全没讲到**时，先 web_search 再回答，回答末尾附上参考链接；搜索失败就用已有知识回答并告知未能联网。
 - 工具结果就是真实执行结果，如实转告学生；失败了就说明原因。
 - 只是资料内容问答时不需要调用工具，直接基于资料片段回答。
@@ -68,7 +88,9 @@ ${todos.length ? todos.map((t) => `- [${t.status}] ${t.id}. ${t.text}`).join("\n
 </current_todos>
 
 ## 当前资料库实时状态
-${buildLibraryState(selectedSourceIds)}${resolvePrompt("chat_append", "") ? `\n\n<user_instructions>\n${resolvePrompt("chat_append", "")}\n</user_instructions>` : ""}`;
+${buildLibraryState(selectedSourceIds)}
+
+${workspaceText}${resolvePrompt("chat_append", "") ? `\n\n<user_instructions>\n${resolvePrompt("chat_append", "")}\n</user_instructions>` : ""}`;
 }
 
 function listToolsText(): string {

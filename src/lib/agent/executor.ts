@@ -20,6 +20,11 @@ export const TOOL_POLICY: Record<string, { timeoutMs: number; retry: boolean }> 
   delete_preference: { timeoutMs: 10_000, retry: false },
   generate_summary: { timeoutMs: 120_000, retry: false },
   load_skill: { timeoutMs: 10_000, retry: true },
+  list_files: { timeoutMs: 10_000, retry: true },
+  read_file: { timeoutMs: 10_000, retry: true },
+  write_file: { timeoutMs: 10_000, retry: false },
+  edit_file: { timeoutMs: 10_000, retry: false },
+  search_code: { timeoutMs: 15_000, retry: true },
 };
 
 const DEFAULT_POLICY = { timeoutMs: 10_000, retry: false };

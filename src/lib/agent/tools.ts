@@ -4,6 +4,9 @@ import { webSearch, webHitsToContext } from "@/lib/webSearch";
 import { replaceTodos, type TodoItem } from "./todo";
 import { listPrefs, savePref, deletePref, countPrefs, PREFS_MAX } from "./prefs";
 import { SKILL_TOOL, executeLoadSkill } from "./skills";
+import { workspaceRoot, resolveInWorkspace, listFilesTree } from "./workspace";
+import fs from "node:fs";
+import path from "node:path";
 
 /** Agent 工具：OpenAI function calling 格式。
  *  定义（TOOLS）给模型看；executeTool（执行器）在服务端真实操作数据库。
@@ -162,10 +165,101 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "list_files",
+      description: "列出工作区某目录的文件（名称/类型/大小/修改时间）。path 缺省 = 工作区根",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string", description: "工作区内相对路径（目录）" } },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "读取工作区文件内容（带行号）。大文件用 offset/limit 分段读",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "工作区内相对路径" },
+          offset: { type: "integer", description: "起始行号（缺省 1）" },
+          limit: { type: "integer", description: "读取行数（缺省 400，上限 400）" },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description: "写入工作区文件（自动建中间目录）。覆盖已有文件需显式 overwrite",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "工作区内相对路径" },
+          content: { type: "string", description: "完整文件内容" },
+          overwrite: { type: "boolean", description: "目标已存在时是否覆盖（缺省 false）" },
+        },
+        required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_file",
+      description: "精确替换文件中的文本（old 必须唯一匹配；多处需 replace_all）。优先于整文件重写",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "工作区内相对路径" },
+          old: { type: "string", description: "要替换的原文（精确匹配）" },
+          new: { type: "string", description: "替换后文本" },
+          replace_all: { type: "boolean", description: "多处匹配时是否全部替换（缺省 false）" },
+        },
+        required: ["path", "old", "new"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_code",
+      description: "在工作区内搜索代码/文本（grep 式）。返回 文件:行号:内容，上限 100 条",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "搜索词或正则" },
+          glob: { type: "string", description: "文件过滤，如 **/*.ts 或 *.md" },
+          regex: { type: "boolean", description: "query 按正则处理（缺省字面量）" },
+          case_insensitive: { type: "boolean", description: "忽略大小写（缺省 false）" },
+        },
+        required: ["query"],
+      },
+    },
+  },
   SKILL_TOOL,
 ] as const;
 
 /** 执行工具调用：返回给模型的文本结果；失败抛错（由调用方转成错误文本回喂模型） */
+
+/** 文件不存在时的友好报错：附相近文件名建议（同名/同后缀，上限 5 个） */
+function fileNotFoundMsg(rel: string): string {
+  const base = path.basename(rel).toLowerCase();
+  const ext = path.extname(rel).toLowerCase();
+  const candidates = listFilesTree("", 8)
+    .filter((n) => n.type === "file")
+    .filter((n) => n.name.toLowerCase().includes(base.replace(ext, "")) || (ext && n.path.toLowerCase().endsWith(ext)))
+    .slice(0, 5)
+    .map((n) => n.path);
+  return `文件不存在：${rel}。${candidates.length ? `相近文件：${candidates.join("、")}（用 read_file 或 list_files 确认路径）` : "用 list_files 浏览工作区结构确认路径"}`;
+}
+
 export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<string> {
   switch (call.name) {
     case "save_preference": {
@@ -196,6 +290,99 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
 
     case "load_skill":
       return executeLoadSkill(call.args, ctx);
+
+    case "list_files": {
+      const dirAbs = resolveInWorkspace(String(call.args.path ?? ""));
+      if (!fs.existsSync(dirAbs) || !fs.statSync(dirAbs).isDirectory()) {
+        throw new Error(`目录不存在：${String(call.args.path ?? "") || "（根）"}。用 list_files 不带参数可看工作区根`);
+      }
+      const entries = fs.readdirSync(dirAbs, { withFileTypes: true }).slice(0, 200).map((e) => {
+        const abs = path.join(dirAbs, e.name);
+        const st = fs.statSync(abs);
+        return e.isDirectory()
+          ? { name: e.name, type: "dir", path: (String(call.args.path ?? "").replace(/\/$/, "") + "/" + e.name).replace(/^\//, "") }
+          : { name: e.name, type: "file", size: st.size, mtime: Math.round(st.mtimeMs) };
+      });
+      return JSON.stringify(entries, null, 1);
+    }
+
+    case "read_file": {
+      const rel = String(call.args.path ?? "");
+      const abs = resolveInWorkspace(rel);
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw new Error(fileNotFoundMsg(rel));
+      const lines = fs.readFileSync(abs, "utf8").split(/\r?\n/);
+      const offset = Math.max(1, Number(call.args.offset ?? 1) || 1);
+      const limit = Math.min(400, Math.max(1, Number(call.args.limit ?? 400) || 400));
+      const slice = lines.slice(offset - 1, offset - 1 + limit);
+      let text = slice.map((l, i) => `${offset + i}| ${l.slice(0, 500)}`).join("\n");
+      if (text.length > 24000) text = text.slice(0, 24000) + "\n……（已截断，用 offset+limit 续读）";
+      return `《${rel}》第 ${offset}-${offset + slice.length - 1} 行（共 ${lines.length} 行）：\n${text}`;
+    }
+
+    case "write_file": {
+      const rel = String(call.args.path ?? "");
+      const abs = resolveInWorkspace(rel);
+      const content = String(call.args.content ?? "");
+      if (fs.existsSync(abs) && fs.statSync(abs).isFile() && !call.args.overwrite) {
+        const head = fs.readFileSync(abs, "utf8").split(/\r?\n/).slice(0, 20).join("\n");
+        throw new Error(`文件已存在：${rel}。确认覆盖请带 overwrite:true。原文件前 20 行：\n${head}`);
+      }
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, content);
+      return `已写入 ${rel}（${content.split(/\r?\n/).length} 行，${content.length} 字符）`;
+    }
+
+    case "edit_file": {
+      const rel = String(call.args.path ?? "");
+      const abs = resolveInWorkspace(rel);
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw new Error(fileNotFoundMsg(rel));
+      const oldText = String(call.args.old ?? "");
+      const newText = String(call.args.new ?? "");
+      if (!oldText) throw new Error("old 不能为空");
+      const src = fs.readFileSync(abs, "utf8");
+      const parts = src.split(oldText);
+      const matches = parts.length - 1;
+      if (!matches) throw new Error(`未找到匹配文本。请先 read_file 确认精确原文（含缩进/空白）：${rel}`);
+      if (matches > 1 && !call.args.replace_all) {
+        const lines = src.split(/\r?\n/);
+        const at: number[] = [];
+        lines.forEach((l, i) => { if (l.includes(oldText.split(/\r?\n/)[0])) at.push(i + 1); });
+        throw new Error(`匹配到 ${matches} 处（行号约 ${at.slice(0, 10).join(", ")}）。确认全部替换请带 replace_all:true`);
+      }
+      fs.writeFileSync(abs, parts.join(newText));
+      return `已替换 ${matches} 处（${rel}）`;
+    }
+
+    case "search_code": {
+      const query = String(call.args.query ?? "").trim();
+      if (!query) throw new Error("缺少 query");
+      const flags = call.args.case_insensitive ? "gi" : "g";
+      const re = call.args.regex
+        ? new RegExp(query, flags)
+        : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+      const glob = String(call.args.glob ?? "").trim();
+      const hitGlob = (rel: string) => {
+        if (!glob) return true;
+        const m = glob.match(/^\*\*?(?:\/(\*\*))?\.(\w+)$/);
+        if (m) return rel.endsWith(`.${m[2]}`);
+        if (glob.endsWith("/**")) return rel.startsWith(glob.slice(0, -3));
+        return rel.includes(glob);
+      };
+      const out: string[] = [];
+      const files = listFilesTree("", 8).filter((n) => n.type === "file" && hitGlob(n.path) && (n.size ?? 0) < 1_000_000);
+      for (const f of files.slice(0, 2000)) {
+        const abs = resolveInWorkspace(f.path);
+        const lines = fs.readFileSync(abs, "utf8").split(/\r?\n/);
+        for (let i = 0; i < lines.length && out.length < 100; i++) {
+          re.lastIndex = 0;
+          if (re.test(lines[i])) out.push(`${f.path}:${i + 1}:${lines[i].slice(0, 200)}`);
+        }
+        if (out.length >= 100) break;
+      }
+      return out.length
+        ? out.join("\n") + (out.length >= 100 ? "\n……（已达 100 条上限，用 glob 收窄）" : "")
+        : `未找到匹配「${query}」${glob ? `（glob ${glob}）` : ""}`;
+    }
 
     case "todo_write": {
       const arr = call.args.todos;
