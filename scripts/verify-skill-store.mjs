@@ -35,11 +35,11 @@ for (const bad of [parseSkillFile("x", "a"), parseSkillFile(`---\nd: 1\n---\ny`,
 for (const n of ["../evil", "MySkill", "a b", "a.b", "", "x".repeat(41)]) assert.equal(isValidSkillName(n), false, n);
 assert.equal(isValidSkillName("exam-plan"), true);
 
-// 5. 截断：正文 >8000 → 精确等于 8000 字 + 后缀；description >300 截到 300 无后缀
+// 5. 截断发生在模型暴露点而非解析层：解析保全量（见 14），此处钉解析层不截断
 const long = parseSkillFile(`---\nname: a\n---\n${"x".repeat(9000)}`, "a");
-assert.equal(long.body, "x".repeat(BODY_MAX) + "……（已截断）");
+assert.equal(long.body, "x".repeat(9000), "解析层不应截断（全量供管理界面）");
 const longDesc = parseSkillFile(`---\nname: a\ndescription: ${"d".repeat(400)}\n---\nx`, "a");
-assert.equal(longDesc.description.length, DESC_MAX);
+assert.equal(longDesc.description.length, 400, "解析层描述不截断");
 
 // 6. 索引段：只收 enabled && !error；格式含序号与破折号；全空返回 ""
 const idx = buildSkillsIndexText([
@@ -100,3 +100,16 @@ assert.ok(r2.includes("无需重复加载"), r2); // Ruling: spec 措辞「已�
 assert.throws(() => executeLoadSkill({ name: "no-such" }, ctx), /demo-skill|可用/, "错误应含可用清单");
 executeLoadSkill({ name: "demo-skill" }, {}); // 无 ctx.loadedSkills 不去重、不崩
 console.log("verify-skill-store: load_skill OK");
+
+// 14. 数据不丢：全量正文/描述往返无损（截断只发生在模型暴露点）
+const longBody = "# 头\n" + "y".repeat(9000);
+writeSkill("long-skill", "d".repeat(400), longBody);
+const round = listSkills().find((s) => s.name === "long-skill");
+assert.equal(round?.body, longBody.trim(), "listSkills 应返回全量正文（启停/编辑回写不丢数据）");
+assert.equal(round?.description, "d".repeat(400), "描述应全量往返");
+const loaded = executeLoadSkill({ name: "long-skill" }, {});
+const exposed = loaded.split("正文：\n\n")[1];
+assert.equal(exposed, longBody.trim().slice(0, BODY_MAX) + "……（已截断）", "load_skill 暴露正文应截断到 BODY_MAX + 后缀");
+const idx2 = buildSkillsIndexText([round]);
+assert.ok(idx2.includes("d".repeat(DESC_MAX)) && !idx2.includes("d".repeat(DESC_MAX + 1)), "索引描述应截断");
+console.log("verify-skill-store: 暴露点截断 OK");

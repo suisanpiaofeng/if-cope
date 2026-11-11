@@ -23,7 +23,8 @@ export function isValidSkillName(name: string): boolean {
   return /^[a-z0-9-]{1,40}$/.test(String(name ?? ""));
 }
 
-/** 解析 SKILL.md 文本。name 恒取目录名（覆盖 frontmatter）；坏文件返回 error 条目（enabled 强制 false） */
+/** 解析 SKILL.md 文本。name 恒取目录名（覆盖 frontmatter）；坏文件返回 error 条目（enabled 强制 false）。
+ *  正文/描述保全量（管理界面回写不丢数据）；对模型的截断在暴露点做（executeLoadSkill / buildSkillsIndexText） */
 export function parseSkillFile(text: string, dirName: string): ParsedSkill {
   const err = (error: string): ParsedSkill => ({
     name: String(dirName ?? ""),
@@ -49,10 +50,9 @@ export function parseSkillFile(text: string, dirName: string): ParsedSkill {
   }
   if (!meta.name) return err("缺少 name 字段");
 
-  const description = (meta.description ?? "").slice(0, DESC_MAX);
+  const description = meta.description ?? "";
   const enabled = (meta.enabled ?? "true").trim().toLowerCase() !== "false";
-  let body = lines.slice(end + 1).join("\n").trim();
-  if (body.length > BODY_MAX) body = body.slice(0, BODY_MAX) + "……（已截断）";
+  const body = lines.slice(end + 1).join("\n").trim();
   return { name: String(dirName), description, enabled, body };
 }
 
@@ -63,7 +63,7 @@ export function buildSkillsIndexText(skills: ParsedSkill[]): string {
   const lines = [
     "<skills>",
     "你有以下技能（可复用的任务指令包）。当学生的任务匹配某技能的 description 时，先调用 load_skill 加载该技能正文，然后严格按其步骤执行；不匹配的技能不要加载。",
-    ...usable.map((s, i) => `${i + 1}. ${s.name} — ${s.description}`),
+    ...usable.map((s, i) => `${i + 1}. ${s.name} — ${s.description.slice(0, DESC_MAX)}`),
     "</skills>",
   ];
   return lines.join("\n");
@@ -96,7 +96,8 @@ export function executeLoadSkill(args: Record<string, unknown>, ctx: { loadedSki
     throw new Error(`技能「${name}」不存在或已禁用。当前可用技能：${usable.map((s) => s.name).join("、") || "（无）"}`);
   }
   ctx?.loadedSkills?.add(name);
-  return `技能《${name}》正文：\n\n${skill.body}`;
+  const body = skill.body.length > BODY_MAX ? skill.body.slice(0, BODY_MAX) + "……（已截断）" : skill.body;
+  return `技能《${name}》正文：\n\n${body}`;
 }
 
 // ── IO 层（Task 2）：data/skills/<name>/SKILL.md 单一数据源 ──

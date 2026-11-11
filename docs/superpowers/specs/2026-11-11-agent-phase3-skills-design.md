@@ -52,16 +52,16 @@ enabled: true
 
 - 字段：
   - `name`：技能标识，`^[a-z0-9-]{1,40}$`（小写字母/数字/连字符，防路径穿越）。**必须与目录名一致**，不一致以目录名为准（解析时覆盖）。
-  - `description`：触发描述，写"何时使用"（供模型判断是否加载），≤300 字，超长截断。
+  - `description`：触发描述，写"何时使用"（供模型判断是否加载）；存储保全量，注入模型时超 300 字截断。
   - `enabled`：`true`/`false`，缺省 `true`。禁用的技能不出现在索引、不可 load。
 - frontmatter 解析自写轻量实现（按行解析 `key: value`，值取冒号后原文 trim），**不引第三方 YAML 依赖**。
-- 正文上限 8000 字，超出截断并追加 `……（已截断）`。
+- 正文/描述存储与管理 API 均保**全量**（设置页启停/编辑回写不丢数据）；对模型的暴露在注入点截断：load_skill 返回正文超 8000 字截断并追加 `……（已截断）`，索引段 description 超 300 字截断。
 - 解析失败（无 frontmatter / 无 name / 非法 name）：跳过该技能，在 `listSkills` 结果中标记 `error` 状态（设置页可见错误原因），不影响其它技能。
 
 ### 3.2 核心库 `src/lib/agent/skills.ts`
 
 纯函数（可被 verify 脚本直测）：
-- `parseSkillFile(text: string, dirName: string): ParsedSkill` — frontmatter + 正文拆分、字段校验、目录名覆盖 name、正文截断
+- `parseSkillFile(text: string, dirName: string): ParsedSkill` — frontmatter + 正文拆分、字段校验、目录名覆盖 name（全量，不截断）
 - `buildSkillsIndexText(skills: ParsedSkill[]): string` — 生成 `<skills>` 索引段文本
 - `isValidSkillName(name: string): boolean` — 名称白名单正则
 
@@ -82,7 +82,7 @@ name: load_skill
 ```
 
 - 行为：
-  - 命中：返回 `技能《name》正文：\n\n<正文>`（8000 字上限已在解析层截断）
+  - 命中：返回 `技能《name》正文：\n\n<正文>`（正文在暴露点按 8000 字上限截断）
   - 同一任务内已加载过同名技能：返回 `技能《name》已在本次任务中加载过，请直接遵循其步骤，无需重复加载`（省 token）
   - name 不存在或已禁用：报错并附当前可用技能名列表（模型可自纠）
   - 去重记录放 `ToolContext.loadedSkills: Set<string>`，生命周期 = 一次请求的 Agent Loop（不落库；工具结果不进持久历史，跨消息本就需要重新加载）
