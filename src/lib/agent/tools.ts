@@ -5,6 +5,8 @@ import { replaceTodos, type TodoItem } from "./todo";
 import { listPrefs, savePref, deletePref, countPrefs, PREFS_MAX } from "./prefs";
 import { SKILL_TOOL, executeLoadSkill } from "./skills";
 import { workspaceRoot, resolveInWorkspace, listFilesTree } from "./workspace";
+import { executeCommand } from "./command";
+import { classifyCommand } from "./confirm";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -243,6 +245,21 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "run_command",
+      description: "在工作区执行命令（受限：黑名单命令直接拒绝；写类/删除类命令需学生确认）。超时默认 30s，输出截断 20k",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "要执行的命令" },
+          timeout_ms: { type: "integer", description: "超时毫秒（缺省 30000，上限 120000）" },
+        },
+        required: ["command"],
+      },
+    },
+  },
   SKILL_TOOL,
 ] as const;
 
@@ -290,6 +307,15 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
 
     case "load_skill":
       return executeLoadSkill(call.args, ctx);
+
+    case "run_command": {
+      const cmd = String(call.args.command ?? "").trim();
+      if (!cmd) throw new Error("缺少 command");
+      if (classifyCommand(cmd) === "deny") throw new Error("命令被安全策略拒绝（黑名单命中）");
+      const t = Math.min(120_000, Math.max(1_000, Number(call.args.timeout_ms ?? 30_000) || 30_000));
+      const r = await executeCommand(cmd, t);
+      return `${r.timedOut ? `命令超时（${t}ms）已终止` : `命令退出码 ${r.code}`}：\n${r.output || "（无输出）"}`;
+    }
 
     case "list_files": {
       const dirAbs = resolveInWorkspace(String(call.args.path ?? ""));
