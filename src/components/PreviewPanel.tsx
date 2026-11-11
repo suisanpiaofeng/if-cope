@@ -18,7 +18,7 @@ export type PreviewTab =
   | { key: string; kind: "source"; id: number; title: string; loading?: boolean; chunks?: { page: number | null; text: string }[] }
   | { key: string; kind: "artifact"; id: number; title: string; artifactType?: string; loading?: boolean; markdown?: string }
   /** 原始文件预览：markdown 渲染 / 图片 / 代码高亮 / 纯文本 / pdf / docx / 网页正文 */
-  | { key: string; kind: "file"; fileType: FilePreviewKind; ext: string; id: number; title: string; loading?: boolean; text?: string; html?: string; error?: string };
+  | { key: string; kind: "file"; fileType: FilePreviewKind; ext: string; id: number; title: string; loading?: boolean; text?: string; html?: string; error?: string; wsPath?: string };
 
 /** 第三栏：多标签预览（可开多个、× 关闭） */
 export default function PreviewPanel({
@@ -28,7 +28,7 @@ export default function PreviewPanel({
   activeKey: string | null;
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
-  onSaveFile: (id: number, text: string) => Promise<SaveFileResult>;
+  onSaveFile: (id: number, text: string, tab?: PreviewTab) => Promise<SaveFileResult>;
   /** 引用跳转：按 sourceId 打开源预览 */
   onOpenSourceById?: (sourceId: number) => void;
 }) {
@@ -90,11 +90,13 @@ export default function PreviewPanel({
     const text = drafts[key] ?? activeFile.text ?? "";
     setSavingKey(key);
     try {
-      const r = await onSaveFile(activeFile.id, text);
+      const r = await onSaveFile(activeFile.id, text, activeFile);
       if (r.ok) {
         setSaveMsgs((m) => ({
           ...m,
-          [key]: r.status === "ready"
+          [key]: r.status === "ws"
+            ? { ok: true, text: "已保存到工作区" }
+            : r.status === "ready"
             ? { ok: true, text: `已保存 · 索引已重建（${r.chunk_count ?? 0} 块）` }
             : { ok: false, text: `文件已保存，但索引重建失败：${r.note ?? "未知原因"}` },
         }));

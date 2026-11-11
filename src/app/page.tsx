@@ -5,6 +5,7 @@ import Sidebar from "@/components/Sidebar";
 import FilesPanel, { type Artifact } from "@/components/FilesPanel";
 import PreviewPanel, { type PreviewTab, type SaveFileResult } from "@/components/PreviewPanel";
 import ChatPanel from "@/components/ChatPanel";
+import WorkspaceTree from "@/components/WorkspaceTree";
 import type { Source } from "@/lib/types";
 import { useLibrary } from "@/lib/useLibrary";
 import { filePreviewKind } from "@/lib/preview";
@@ -19,6 +20,8 @@ export default function Workspace() {
   // 可拖动的分栏宽度
   const [filesW, setFilesW] = useState(264);
   const [chatW, setChatW] = useState(340);
+  // 资源栏视图：资料库 / 工作区（harness P0 §3.3）
+  const [panelView, setPanelView] = useState<"library" | "workspace">("library");
 
   // 共享资源库（第二栏数据/操作单点实现，翻译/解题页同源）；删资源时同步关预览标签
   const lib = useLibrary({
@@ -58,7 +61,18 @@ export default function Workspace() {
 
   // ---------- 预览标签 ----------
   // 编辑保存：写回原始文件 + 重建索引，并同步更新标签里的文本
-  async function saveFileText(id: number, text: string): Promise<SaveFileResult> {
+  async function saveFileText(id: number, text: string, tab?: PreviewTab): Promise<SaveFileResult> {
+    // 工作区文件：写回 /api/workspace/file（乐观并发：带打开时内容做 expectedOld）
+    if (tab && "wsPath" in tab && tab.wsPath) {
+      const res = await fetch("/api/workspace/file", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: tab.wsPath, content: text, expectedOld: tab.text }),
+      });
+      const data = await res.json().catch(() => ({} as { error?: string }));
+      if (!res.ok) return { ok: false, error: data.error ?? `HTTP ${res.status}` };
+      setTabs((t) => t.map((x) => (x.key === tab.key ? { ...x, text } : x)));
+      return { ok: true, status: "ws" };
+    }
     const res = await fetch(`/api/sources/${id}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
@@ -195,11 +209,59 @@ export default function Workspace() {
     });
   }
 
+  // ---------- 工作区文件预览 ----------
+  function openWsFile(path: string, name: string) {
+    const key = `ws-${path}`;
+    if (tabs.some((t) => t.key === key)) {
+      setActiveKey(key);
+      return;
+    }
+    setTabs((t) => [
+      ...t,
+      { key, kind: "file", fileType: "markdown" as const, ext: "", id: -1, title: name, loading: true, wsPath: path },
+    ]);
+    setActiveKey(key);
+    fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        const ext = name.includes(".") ? name.split(".").pop()! : "";
+        setTabs((t) =>
+          t.map((x) =>
+            x.key === key
+              ? {
+                  ...x,
+                  kind: "file" as const,
+                  ext,
+                  fileType: filePreviewKind(ext) ?? "text",
+                  loading: false,
+                  text: d.content ?? "",
+                  error: d.error,
+                }
+              : x
+          )
+        );
+      });
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-white">
       <Sidebar configured={configured} />
 
-      <div className="shrink-0" style={{ width: filesW }}>
+      <div className="flex shrink-0 flex-col" style={{ width: filesW }}>
+        <div className="flex gap-1 border-b border-neutral-200 px-3 pt-2">
+          {([['library', '资料库'], ['workspace', '工作区']] as const).map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setPanelView(k)}
+              className={`-mb-px rounded-t-md border-b-2 px-2.5 py-1.5 text-xs font-medium ${
+                panelView === k ? 'border-neutral-900 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-700'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="min-h-0 flex-1">
+          {panelView === "library" ? (
         <FilesPanel
           sources={sources}
           artifacts={artifacts}
@@ -223,6 +285,10 @@ export default function Workspace() {
           onOpenSource={openSource}
           onOpenArtifact={openArtifact}
         />
+          ) : (
+            <WorkspaceTree onOpenFile={openWsFile} />
+          )}
+        </div>
       </div>
 
       <Divider onPointerDown={(e) => startResize(e, "files")} />
