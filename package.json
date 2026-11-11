@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start -p 3777",
     "typecheck": "tsc --noEmit",
-    "verify": "node scripts/verify-agent-core.mjs && node scripts/verify-context-fold.mjs && node scripts/verify-personal-store.mjs && node scripts/verify-qa-map-graph.mjs && node scripts/verify-revproxy-fn.mjs && node scripts/verify-todo-store.mjs && node scripts/verify-skill-store.mjs",
+    "verify": "node scripts/verify-agent-core.mjs && node scripts/verify-context-fold.mjs && node scripts/verify-personal-store.mjs && node scripts/verify-qa-map-graph.mjs && node scripts/verify-revproxy-fn.mjs && node scripts/verify-todo-store.mjs && node scripts/verify-skill-store.mjs && node scripts/verify-workspace-fn.mjs",
     "postinstall": "node scripts/trim-heavy-deps.mjs"
   },
   "dependencies": {

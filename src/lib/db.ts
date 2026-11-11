@@ -240,6 +240,8 @@ export type ModelSettings = {
   translateModel?: string;
   /** 用户级指令（个性化：AGENTS.md 式自由文本，运行时注入所有 LLM 场景） */
   userDirective?: string;
+  /** 工作区根目录（harness P0；空 = 默认 data/workspace） */
+  workspacePath?: string;
 };
 
 const EMPTY: ModelSettings = {
