@@ -3,7 +3,8 @@ import { generateSummary } from "@/lib/artifact";
 import { webSearch, webHitsToContext } from "@/lib/webSearch";
 import { replaceTodos, type TodoItem } from "./todo";
 import { listPrefs, savePref, deletePref, countPrefs, PREFS_MAX } from "./prefs";
-import { SKILL_TOOL, executeLoadSkill } from "./skills";
+import { SKILL_TOOL, executeLoadSkill, listSkills, writeSkill, isValidSkillName } from "./skills";
+import { planImport, injectName } from "./skillImport";
 import { workspaceRoot, resolveInWorkspace, listFilesTree } from "./workspace";
 import { executeCommand } from "./command";
 import { classifyCommand } from "./confirm";
@@ -261,6 +262,40 @@ export const TOOLS = [
     },
   },
   SKILL_TOOL,
+  {
+    type: "function",
+    function: {
+      name: "create_skill",
+      description: "创建/安装一个技能（SKILL.md 指令包）。学生说「帮我创建 XX 技能」时，生成完整技能正文并注册，无需学生手动操作",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "技能名（小写字母/数字/连字符，如 wrong-note）" },
+          description: { type: "string", description: "触发描述：何时使用该技能" },
+          body: { type: "string", description: "技能正文（Markdown：步骤/模板/约束，模型加载后遵循）" },
+          triggers: { type: "string", description: "触发条件（可选，逗号分隔）" },
+          overwrite: { type: "boolean", description: "同名技能已存在时是否覆盖（缺省 false）" },
+        },
+        required: ["name", "description", "body"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "install_skill",
+      description: "把资料库里的一份 md/文本资料直接注册为技能（自动生成元数据）。学生上传 md 后说「把这个装成技能」时使用",
+      parameters: {
+        type: "object",
+        properties: {
+          source_id: { type: "integer", description: "资料 id" },
+          name: { type: "string", description: "技能名（可选；资料名非英文时建议指定）" },
+          overwrite: { type: "boolean", description: "同名技能已存在时是否覆盖（缺省 false）" },
+        },
+        required: ["source_id"],
+      },
+    },
+  },
 ] as const;
 
 /** 执行工具调用：返回给模型的文本结果；失败抛错（由调用方转成错误文本回喂模型） */
@@ -307,6 +342,46 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
 
     case "load_skill":
       return executeLoadSkill(call.args, ctx);
+
+    case "create_skill": {
+      const name = String(call.args.name ?? "").trim();
+      const description = String(call.args.description ?? "").trim();
+      const bodyText = String(call.args.body ?? "").trim();
+      if (!isValidSkillName(name)) throw new Error("技能名非法：仅允许小写字母/数字/连字符，≤40 位");
+      if (!bodyText) throw new Error("技能正文 body 不能为空");
+      const exist = listSkills().find((s) => s.name === name);
+      if (exist && !call.args.overwrite) {
+        throw new Error(`技能「${name}」已存在（描述：${exist.description || "无"}）。确认覆盖请带 overwrite:true，或换个名字`);
+      }
+      writeSkill(name, description, bodyText, exist ? exist.enabled : true, {
+        triggers: call.args.triggers ? String(call.args.triggers) : undefined,
+      });
+      return `已${exist ? "覆盖" : ""}安装技能「${name}」。学生可在设置页「技能」里查看/启停；对话中任务匹配描述时会自动加载`;
+    }
+
+    case "install_skill": {
+      const id = Number(call.args.source_id);
+      if (!Number.isInteger(id)) throw new Error("source_id 必须是整数");
+      const src = db.prepare("SELECT id, title, ext, status FROM sources WHERE id = ?").get(id) as
+        | { id: number; title: string; ext: string; status: string }
+        | undefined;
+      if (!src) throw new Error(`资料 #${id} 不存在`);
+      const chunks = db.prepare("SELECT text FROM chunks WHERE source_id = ? ORDER BY idx").all(id) as { text: string }[];
+      if (!chunks.length) return `《${src.title}》没有可安装的文本（非文本类型或入库失败），无法注册为技能`;
+      const content = chunks.map((c) => c.text).join("\n\n");
+      // name 覆盖：注入/替换 frontmatter name 行（不嵌套，复用 planImport 的元数据生成）
+      const nameArg = call.args.name ? String(call.args.name).trim() : "";
+      const payload = nameArg ? injectName(content, nameArg) : content;
+      const plan = planImport([{ path: `${src.title}.md`, content: payload }], listSkills().map((s) => s.name));
+      if (plan.errors.length) throw new Error(`${plan.errors[0].error}（请带 name 参数指定技能名，如 name: my-skill）`);
+      if (plan.conflicts.length && !call.args.overwrite) {
+        throw new Error(`技能「${plan.conflicts[0].name}」已存在（描述：${listSkills().find((s) => s.name === plan.conflicts[0].name)?.description || "无"}）。确认覆盖请带 overwrite:true`);
+      }
+      const ins = plan.installs[0] ?? { ...plan.conflicts[0], overwrite: true };
+      const prev = listSkills().find((s) => s.name === ins.name);
+      writeSkill(ins.name, ins.description, ins.body, prev ? prev.enabled : true, { triggers: ins.triggers, params: ins.params });
+      return `已把资料《${src.title}》注册为技能「${ins.name}」（描述：${ins.description || "无"}）。可在设置页「技能」里查看`;
+    }
 
     case "run_command": {
       const cmd = String(call.args.command ?? "").trim();

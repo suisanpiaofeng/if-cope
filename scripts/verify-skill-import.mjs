@@ -1,7 +1,7 @@
 // skill 导入验证（计划 P0 T6：元数据自动生成/两步式冲突处理）
 // 运行：node scripts/verify-skill-import.mjs
 import assert from "node:assert/strict";
-const { deriveSkillName, autoDescription, planImport } = await import("../src/lib/agent/skillImport.ts");
+const { deriveSkillName, autoDescription, planImport, injectName } = await import("../src/lib/agent/skillImport.ts");
 const { parseSkillFile } = await import("../src/lib/agent/skills.ts");
 
 // 1. deriveSkillName：slug 化/压缩/截 40/去首尾连字符
@@ -64,3 +64,12 @@ assert.equal(r4.errors.length, 2);
 assert.equal(r4.installs.length, 0);
 
 console.log("verify-skill-import: OK");
+
+// 8. 自动描述跳过分隔行；name 覆盖注入不产生嵌套 frontmatter（T7 冒烟发现）
+assert.equal(autoDescription("---\n第二行是标题\n正文", ""), "第二行是标题");
+const injected = injectName("---\nname: old\ndescription: d\n---\n# 正文", "new-name");
+assert.ok(injected.startsWith("---\nname: new-name"), injected);
+assert.equal(injected.split("\n---\n").length - 1, 1, "不应嵌套 frontmatter（分隔符仅 1 处）");
+assert.ok(injected.includes("description: d"), "其余元数据保留");
+assert.equal(injectName("# 纯正文", "n"), "---\nname: n\n---\n# 纯正文");
+console.log("verify-skill-import: 注入/描述加固 OK");

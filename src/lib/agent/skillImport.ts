@@ -37,11 +37,14 @@ export function deriveSkillName(filePath: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/** 元数据自动生成：triggers 优先，否则正文首个非空行去 Markdown 标记 */
+/** 元数据自动生成：triggers 优先，否则正文首个非空行（跳过分隔行/代码围栏）去 Markdown 标记 */
 export function autoDescription(body: string, triggers?: string): string {
   const t = String(triggers ?? "").trim();
   if (t) return t.slice(0, 300);
-  const first = String(body ?? "").split(/\r?\n/).find((l) => l.trim()) ?? "";
+  const first =
+    String(body ?? "")
+      .split(/\r?\n/)
+      .find((l) => l.trim() && !/^(-{3,}|```+)\s*$/.test(l.trim())) ?? "";
   return first
     .replace(/^[#>\s*]+/, "")
     .replace(/[*_`~]/g, "")
@@ -86,6 +89,18 @@ function findFreeName(base: string, taken: Set<string>): string {
     if (!taken.has(cand)) return cand;
   }
   return `${base}-${Date.now()}`;
+}
+
+/** 把 name 覆盖注入内容：已有 frontmatter 则替换/插入 name 行（不嵌套）；无 frontmatter 则包裹头 */
+export function injectName(content: string, name: string): string {
+  const raw = String(content ?? "");
+  const lines = raw.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") return `---\nname: ${name}\n---\n${raw.trim()}`;
+  const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+  if (end < 0) return `---\nname: ${name}\n---\n${raw.trim()}`;
+  const head = lines.slice(1, end).map((l) => (/^name\s*:/i.test(l) ? `name: ${name}` : l));
+  if (!head.some((l) => /^name\s*:/i.test(l))) head.unshift(`name: ${name}`);
+  return ["---", ...head, "---", ...lines.slice(end + 1)].join("\n");
 }
 
 /** 导入规划（两步式共用）：冲突（已存在/同批重复）无 resolution 进 conflicts；

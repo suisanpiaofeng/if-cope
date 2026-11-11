@@ -25,6 +25,8 @@ export const TOOL_POLICY: Record<string, { timeoutMs: number; retry: boolean }> 
   write_file: { timeoutMs: 10_000, retry: false },
   edit_file: { timeoutMs: 10_000, retry: false },
   search_code: { timeoutMs: 15_000, retry: true },
+  create_skill: { timeoutMs: 10_000, retry: false },
+  install_skill: { timeoutMs: 15_000, retry: false },
   run_command: { timeoutMs: 130_000, retry: false }, // 执行超时由工具自身控制（≤120s），策略层只兑底
 };
 
