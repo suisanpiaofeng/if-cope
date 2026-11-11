@@ -22,13 +22,17 @@ import Sidebar from "@/components/Sidebar";
 import FilesPanel from "@/components/FilesPanel";
 import QAMapCard, { type QaMapRFNode } from "@/components/qa-map/QAMapCard";
 import EdgesOverlay from "@/components/qa-map/EdgesOverlay";
+import EdgeDialog from "@/components/qa-map/EdgeDialog";
 import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
 import { DND_MIME, readDnd } from "@/lib/dnd";
 import {
+  edgeId,
+  hasCycle,
   nextNodePosition,
   normalizeQaMap,
   qaMapToMarkdown,
   type QaMapData,
+  type QaMapEdge,
   type QaMapNode,
 } from "@/lib/qaMapTypes";
 import type { Source } from "@/lib/types";
@@ -41,6 +45,7 @@ type MapTab = {
   mapId: number | null;
   title: string;
   nodes: QaMapNode[];
+  edges: QaMapEdge[];
   selectedId: string | null;
 };
 
@@ -50,6 +55,7 @@ const newTab = (): MapTab => ({
   mapId: null,
   title: "未命名知识地图",
   nodes: [],
+  edges: [],
   selectedId: null,
 });
 
@@ -68,10 +74,12 @@ export default function SolvePage() {
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
   const [dropOver, setDropOver] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<{
-    childId: string;
-    end: "parent" | "child";
+    edgeId: string;
+    end: "from" | "to";
     draft: string;
   } | null>(null);
+  // 待确认的手动连线（弹窗填两端标注后才建边）
+  const [pendingConn, setPendingConn] = useState<{ from: string; to: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -99,7 +107,7 @@ export default function SolvePage() {
           const t = next.find((x) => x.key === key);
           if (t && t.mapId != null) {
             setSaveState("保存中…");
-            const data: QaMapData = { title: t.title, nodes: t.nodes };
+            const data: QaMapData = { title: t.title, nodes: t.nodes, edges: t.edges ?? [] };
             fetch(`/api/artifacts/${t.mapId}`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
@@ -137,6 +145,7 @@ export default function SolvePage() {
         error?: string;
         mapId?: number;
         node?: QaMapNode;
+        links?: QaMapEdge[];
         model?: string;
         autoRouted?: boolean;
       };
@@ -148,6 +157,13 @@ export default function SolvePage() {
                 ...t,
                 mapId: d.mapId ?? t.mapId,
                 nodes: [...t.nodes, d.node!],
+                // 本次新建的边落进边表（同向去重）
+                edges: [
+                  ...(t.edges ?? []),
+                  ...(d.links ?? []).filter(
+                    (l) => !(t.edges ?? []).some((e) => e.from === l.from && e.to === l.to)
+                  ),
+                ],
                 selectedId: d.node!.id,
                 title: t.mapId == null && d.mapId != null ? d.node!.title : t.title,
               }
@@ -197,10 +213,10 @@ export default function SolvePage() {
   const onDelete = useCallback((node: QaMapNode) => {
     const a = activeRef.current;
     if (!a) return;
-    const next = a.nodes
-      .filter((n) => n.id !== node.id)
-      .map((n) => (n.parentId === node.id ? { ...n, parentId: node.parentId } : n));
-    patchActiveRef.current({ nodes: next, selectedId: null });
+    // 删节点及其全部入边/出边
+    const next = a.nodes.filter((n) => n.id !== node.id);
+    const nextEdges = (a.edges ?? []).filter((e) => e.from !== node.id && e.to !== node.id);
+    patchActiveRef.current({ nodes: next, edges: nextEdges, selectedId: null });
   }, []);
 
   // ── 受控节点：只应用拖动 position（实时跟手，不落库）。
@@ -231,43 +247,49 @@ export default function SolvePage() {
     [activeKey]
   );
 
-  // ── 自定义连线：拖右侧锚点到另一张卡 → 建立父子关系（防环） ──
-  const onConnect = useCallback(
-    (conn: Connection) => {
-      if (!conn.source || !conn.target || conn.source === conn.target) return;
-      const isAncestor = (maybeAncestor: string, nodeId: string): boolean => {
-        let cur = active.nodes.find((n) => n.id === nodeId);
-        while (cur?.parentId) {
-          if (cur.parentId === maybeAncestor) return true;
-          cur = active.nodes.find((n) => n.id === cur!.parentId);
-        }
-        return false;
-      };
-      if (isAncestor(conn.target, conn.source)) {
-        setError("不能连回自己的上游（会成环）");
-        return;
-      }
-      patchActive({
-        nodes: active.nodes.map((n) =>
-          n.id === conn.target ? { ...n, parentId: conn.source, relation: n.relation ?? "追问" } : n
-        ),
-      });
-    },
-    [active, patchActive]
-  );
+  // ── 自定义连线：拖锚点到另一张卡 → 弹窗填两端标注 → 建边（防环/同向去重） ──
+  const onConnect = useCallback((conn: Connection) => {
+    if (!conn.source || !conn.target) return;
+    const a = activeRef.current;
+    if (!a) return;
+    if (conn.source === conn.target || hasCycle(a.nodes, a.edges ?? [], conn.source, conn.target)) {
+      setError("不能连回自己或上游（会形成循环），已拒绝");
+      return;
+    }
+    if ((a.edges ?? []).some((e) => e.from === conn.source && e.to === conn.target)) {
+      setNotice("这两个卡片之间已有同向连线");
+      return;
+    }
+    setPendingConn({ from: conn.source, to: conn.target });
+  }, []);
 
-  // ── 点边端：两端关系词独立编辑（点哪端改哪端）/ 断开 ──
+  // ── 弹窗确认：追加边（两端标注可留空） ──
+  const pendingConnRef = useRef<{ from: string; to: string } | null>(null);
+  pendingConnRef.current = pendingConn;
+  const confirmEdge = useCallback((relFrom: string, relTo: string) => {
+    const pc = pendingConnRef.current;
+    const a = activeRef.current;
+    if (!pc || !a) return;
+    const e: QaMapEdge = {
+      id: edgeId(pc.from, pc.to),
+      from: pc.from,
+      to: pc.to,
+      ...(relFrom.trim() ? { relFrom: relFrom.trim().slice(0, 40) } : {}),
+      ...(relTo.trim() ? { relTo: relTo.trim().slice(0, 40) } : {}),
+    };
+    patchActiveRef.current({ edges: [...(a.edges ?? []), e] });
+    setPendingConn(null);
+  }, []);
+
+  // ── 点边端：两端标注独立编辑（点哪端改哪端）/ 断开 ──
   const applyEdgeRelation = useCallback(() => {
     if (!selectedEdge) return;
-    const { childId, end, draft } = selectedEdge;
-    const value = draft.trim().slice(0, 10);
+    const { edgeId: eid, end, draft } = selectedEdge;
+    const value = draft.trim().slice(0, 40);
     patchActive({
-      nodes: active.nodes.map((n) => {
-        if (n.id !== childId) return n;
-        return end === "parent"
-          ? { ...n, relParentEnd: value || "追问" }
-          : { ...n, relChildEnd: value || "上文依据" };
-      }),
+      edges: (active.edges ?? []).map((e) =>
+        e.id === eid ? (end === "from" ? { ...e, relFrom: value || undefined } : { ...e, relTo: value || undefined }) : e
+      ),
     });
     setSelectedEdge(null);
   }, [active, patchActive, selectedEdge]);
@@ -275,11 +297,7 @@ export default function SolvePage() {
   const disconnectEdge = useCallback(() => {
     if (!selectedEdge) return;
     patchActive({
-      nodes: active.nodes.map((n) =>
-        n.id === selectedEdge.childId
-          ? { ...n, parentId: null, relation: undefined, relParentEnd: undefined, relChildEnd: undefined }
-          : n
-      ),
+      edges: (active.edges ?? []).filter((e) => e.id !== selectedEdge.edgeId),
     });
     setSelectedEdge(null);
   }, [active, patchActive, selectedEdge]);
@@ -309,12 +327,14 @@ export default function SolvePage() {
       .then((r) => r.json())
       .then((d) => {
         try {
-          const map = JSON.parse(d.content ?? "") as QaMapData;
+          const map = normalizeQaMap(JSON.parse(d.content ?? "")); // 旧格式自动迁移为边表
+          if (!map) throw new Error("bad");
           const t: MapTab = {
             key: `m${Date.now().toString(36)}${tabSeq++}`,
             mapId: id,
             title: map.title || d.title || "知识地图",
             nodes: map.nodes ?? [],
+            edges: map.edges ?? [],
             selectedId: null,
           };
           setTabs((prev) => {
@@ -358,6 +378,7 @@ export default function SolvePage() {
         mapId: d.id,
         title: map.title,
         nodes: map.nodes,
+        edges: map.edges ?? [],
         selectedId: null,
       };
       setTabs((prev) => [...prev, t]);
@@ -382,7 +403,7 @@ export default function SolvePage() {
 
   function download(kind: "md" | "json") {
     if (!active) return;
-    const data: QaMapData = { title: active.title, nodes: active.nodes };
+    const data: QaMapData = { title: active.title, nodes: active.nodes, edges: active.edges ?? [] };
     const body = kind === "md" ? qaMapToMarkdown(data) : JSON.stringify(data, null, 2);
     const blob = new Blob([body], {
       type: kind === "md" ? "text/markdown;charset=utf-8" : "application/json;charset=utf-8",
@@ -661,35 +682,44 @@ export default function SolvePage() {
                 {/* 连线层：自绘 SVG（RF 边管道不可靠，自绘稳定且可交互） */}
                 <EdgesOverlay
                   nodes={active?.nodes ?? []}
-                  selectedEdgeId={selectedEdge?.childId}
-                  onEdgeClick={(childId, end) => {
-                    const child = active.nodes.find((n) => n.id === childId);
-                    if (!child) return;
+                  edges={active?.edges ?? []}
+                  selectedEdgeId={selectedEdge?.edgeId}
+                  onEdgeClick={(edgeId, end) => {
+                    const edge = (active.edges ?? []).find((e) => e.id === edgeId);
+                    if (!edge) return;
                     setSelectedEdge({
-                      childId,
+                      edgeId,
                       end,
-                      draft:
-                        end === "parent"
-                          ? (child.relParentEnd ?? child.relation ?? "追问")
-                          : (child.relChildEnd ?? "上文依据"),
+                      draft: (end === "from" ? edge.relFrom : edge.relTo) ?? "",
                     });
                   }}
                 />
               </ReactFlow>
             )}
 
+            {/* 手动连线弹窗：填两端标注（可留空）后建边 */}
+            {pendingConn && (
+              <EdgeDialog
+                nodes={active?.nodes ?? []}
+                from={pendingConn.from}
+                to={pendingConn.to}
+                onCancel={() => setPendingConn(null)}
+                onConfirm={confirmEdge}
+              />
+            )}
+
             {/* 边编辑：改关系词 / 断开连线 */}
             {selectedEdge && (
               <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-lg border border-neutral-300 bg-white px-3 py-2 shadow-lg">
                 <span className="text-[11px] text-neutral-500">
-                  {selectedEdge.end === "parent" ? "父端标签 · 子卡相对父" : "子端标签 · 父卡相对子"}
+                  {selectedEdge.end === "from" ? "源端标注 · 目标卡相对源卡" : "目标端标注 · 源卡相对目标卡"}
                 </span>
                 <input
                   value={selectedEdge.draft}
                   onChange={(e) => setSelectedEdge({ ...selectedEdge, draft: e.target.value })}
                   onKeyDown={(e) => e.key === "Enter" && applyEdgeRelation()}
-                  className="w-28 rounded border border-neutral-200 px-2 py-1 text-[11px] outline-none focus:border-neutral-400"
-                  placeholder="2-6 字关系词"
+                  className="w-40 rounded border border-neutral-200 px-2 py-1 text-[11px] outline-none focus:border-neutral-400"
+                  placeholder="关系标注（如：前提：线性时不变假设）"
                   autoFocus
                 />
                 <button onClick={applyEdgeRelation} className="rounded border border-neutral-900 bg-neutral-900 px-2 py-1 text-[10px] text-white hover:bg-neutral-700">

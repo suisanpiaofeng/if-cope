@@ -126,7 +126,7 @@ function QAMapCard({ data, selected }: NodeProps<QaMapRFNode>) {
           <span className="h-2 w-2 shrink-0 rounded-full bg-blue-500" />
           <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-neutral-900">{n.title}</span>
           <span className="num shrink-0 text-[10px] text-neutral-400">
-            {n.parentId ? `追问 · 第 ${n.round} 轮` : "话题"}
+            {n.round > 1 ? `追问 · 第 ${n.round} 轮` : "话题"}
           </span>
           {data.busy && <span className="shrink-0 animate-pulse text-[10px] text-violet-500">生成中…</span>}
         </div>
