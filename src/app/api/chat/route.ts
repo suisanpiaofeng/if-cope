@@ -25,6 +25,18 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ thread, messages });
 }
 
+/** 会话重命名（harness P0 §5） */
+export async function PATCH(req: NextRequest) {
+  const body = (await req.json()) as { threadId?: number; title?: string };
+  const tid = Number(body.threadId);
+  const title = String(body.title ?? "").trim().slice(0, 60);
+  if (!tid) return NextResponse.json({ error: "缺少 threadId" }, { status: 400 });
+  if (!title) return NextResponse.json({ error: "标题不能为空" }, { status: 400 });
+  const r = db.prepare("UPDATE threads SET title = ? WHERE id = ?").run(title, tid);
+  if (!r.changes) return NextResponse.json({ error: "会话不存在" }, { status: 404 });
+  return NextResponse.json({ ok: true });
+}
+
 export async function DELETE(req: NextRequest) {
   const threadId = Number(req.nextUrl.searchParams.get("threadId"));
   if (!threadId) return NextResponse.json({ error: "缺少 threadId" }, { status: 400 });

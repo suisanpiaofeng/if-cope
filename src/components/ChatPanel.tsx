@@ -419,7 +419,7 @@ export default function ChatPanel({
                         className="block w-full rounded-xl border border-neutral-200 bg-white px-3.5 py-3 text-left transition-colors hover:border-neutral-300 hover:bg-neutral-50">
                         <div className="flex items-center gap-2">
                           {isRunning(t.id) && <span className="breathe h-2 w-2 shrink-0 rounded-full bg-emerald-500" />}
-                          <span className="truncate text-[13px] font-medium text-neutral-800">{t.title}</span>
+                          <ThreadTitle id={t.id} title={t.title} onRenamed={loadThreads} />
                         </div>
                         <div className="mt-1 flex items-center justify-between">
                           <span className={`text-[11px] ${isRunning(t.id) ? "text-emerald-600" : "text-neutral-400"}`}>
@@ -564,7 +564,7 @@ export default function ChatPanel({
                     threadId === t.id ? "bg-neutral-100" : "hover:bg-neutral-50"}`}>
                   <div className="flex items-center gap-2">
                     {isRunning(t.id) && <span className="breathe h-2 w-2 shrink-0 rounded-full bg-emerald-500" />}
-                    <span className="truncate pr-6 text-[13px] text-neutral-700">{t.title}</span>
+                    <ThreadTitle id={t.id} title={t.title} onRenamed={loadThreads} className="pr-6 text-neutral-700" />
                   </div>
                   <div className="mt-0.5 text-[10px] text-neutral-400">
                     {isRunning(t.id) ? <span className="text-emerald-600">正在回答…</span> : timeAgo(t.created_at)}
@@ -812,5 +812,56 @@ function ConfirmBox({ card, onDone }: { card: ConfirmCard; onDone: (status: "app
         )}
       </div>
     </div>
+  );
+}
+
+/** 会话标题：双击重命名（harness P0 §5） */
+function ThreadTitle({ id, title, onRenamed, className = "text-neutral-800" }: { id: number; title: string; onRenamed: () => void; className?: string }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  const [busy, setBusy] = useState(false);
+
+  async function commit() {
+    const v = draft.trim();
+    setEditing(false);
+    if (!v || v === title || busy) return;
+    setBusy(true);
+    await fetch("/api/chat", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId: id, title: v }),
+    }).catch(() => null);
+    setBusy(false);
+    onRenamed();
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") setEditing(false);
+        }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full rounded border border-neutral-300 px-1.5 py-0.5 text-[13px] outline-none"
+      />
+    );
+  }
+  return (
+    <span
+      title="双击重命名"
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        setDraft(title);
+        setEditing(true);
+      }}
+      className={`min-w-0 flex-1 cursor-text truncate text-[13px] font-medium ${className}`}
+    >
+      {title}
+    </span>
   );
 }

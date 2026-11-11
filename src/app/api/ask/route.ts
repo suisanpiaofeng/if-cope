@@ -185,7 +185,8 @@ export async function POST(req: NextRequest) {
       const reqBody: Record<string, unknown> = {
         model: s.chatModel,
         messages: [{ role: "system", content: resolvePrompt("ask_system", PROMPT_DEFAULTS.ask_system) + (skillsSection ? `\n\n${skillsSection}` : "") }, ...history, { role: "user", content: userContent }],
-        temperature: 0.3,
+        temperature: s.temperature ?? 0.3,
+        ...(s.maxTokens != null ? { max_tokens: s.maxTokens } : {}),
         ...(activeTools.length ? { tools: activeTools, tool_choice: "auto" } : {}),
       };
       let res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {

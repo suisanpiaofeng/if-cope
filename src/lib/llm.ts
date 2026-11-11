@@ -219,6 +219,9 @@ async function* streamOnce(
     messages,
     stream: true,
     stream_options: { include_usage: true },
+    // 生成参数（harness P0 §5）：空 = 走模型默认
+    ...(s.temperature != null ? { temperature: s.temperature } : {}),
+    ...(s.maxTokens != null ? { max_tokens: s.maxTokens } : {}),
   };
   if (useTools && TOOLS.length) body.tools = TOOLS;
 

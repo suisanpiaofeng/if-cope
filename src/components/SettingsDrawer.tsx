@@ -19,6 +19,11 @@ type Settings = {
   translateModel?: string;
   userDirective?: string;
   confirmMode?: "writes" | "all" | "none";
+  temperature?: number;
+  maxTokens?: number;
+  workspacePath?: string;
+  profiles?: { name: string; baseUrl: string; apiKey: string; chatModel: string; temperature?: number; maxTokens?: number }[];
+  activeProfile?: string;
 };
 
 type TestResult = {
@@ -68,6 +73,12 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
   const [rows, setRows] = useState<UsageRow[]>([]);
   const [tab, setTab] = useState<"model" | "personal" | "skills">("model"); // 三段切换（自审裁决：页面原本无 Tab）
   const [confirmMode, setConfirmMode] = useState<"writes" | "all" | "none">("writes");
+  // 模型配置档/生成参数/工作区（harness P0 §5）
+  const [temperature, setTemperature] = useState("");
+  const [maxTokens, setMaxTokens] = useState("");
+  const [workspacePath, setWorkspacePath] = useState("");
+  const [profiles, setProfiles] = useState<Settings["profiles"]>([]);
+  const [activeProfile, setActiveProfile] = useState("");
 
   async function saveConfirmMode(mode: "writes" | "all" | "none") {
     setConfirmMode(mode);
@@ -85,6 +96,11 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
       .then((r) => r.json())
       .then((d: Settings) => {
         setConfirmMode(d.confirmMode ?? "writes");
+        setTemperature(d.temperature != null ? String(d.temperature) : "");
+        setMaxTokens(d.maxTokens != null ? String(d.maxTokens) : "");
+        setWorkspacePath(d.workspacePath ?? "");
+        setProfiles(d.profiles ?? []);
+        setActiveProfile(d.activeProfile ?? "");
         setBaseUrl(d.baseUrl);
         setApiKey(d.apiKey);
         setHasKey(Boolean(d.hasKey));
@@ -136,6 +152,52 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
     }
   }
 
+  async function switchProfile(name: string) {
+    if (!name) return;
+    const res = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ switchProfile: name }),
+    }).catch(() => null);
+    if (res?.ok) {
+      const d = await res.json();
+      setActiveProfile(name);
+      setBaseUrl(d.baseUrl ?? "");
+      setApiKey(d.apiKey ?? "");
+      setChatModel(d.chatModel ?? "");
+      setTemperature(d.temperature != null ? String(d.temperature) : "");
+      setMaxTokens(d.maxTokens != null ? String(d.maxTokens) : "");
+      setSaveMsg(`已切换到配置档「${name}」`);
+    }
+  }
+
+  function newProfile() {
+    const name = window.prompt("配置档名称（如 deepseek / gpt）")?.trim();
+    if (!name) return;
+    const next = [
+      ...(profiles ?? []).filter((p) => p.name !== name),
+      {
+        name,
+        baseUrl,
+        apiKey,
+        chatModel,
+        temperature: temperature.trim() === "" ? undefined : Number(temperature),
+        maxTokens: maxTokens.trim() === "" ? undefined : Number(maxTokens),
+      },
+    ];
+    setProfiles(next);
+    setActiveProfile(name);
+    setSaveMsg(`已创建配置档「${name}」（记得点「保存并启用」落库）`);
+  }
+
+  function deleteProfile() {
+    if (!activeProfile) return;
+    if (!window.confirm(`确定删除配置档「${activeProfile}」吗？主配置不受影响。`)) return;
+    setProfiles((profiles ?? []).filter((p) => p.name !== activeProfile));
+    setActiveProfile("");
+    setSaveMsg("已删除配置档（记得点「保存并启用」落库）");
+  }
+
   async function save() {
     setSaving(true);
     setError(null);
@@ -154,6 +216,11 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
           translateBaseUrl,
           translateApiKey,
           translateModel,
+          temperature: temperature.trim() === "" ? null : Number(temperature),
+          maxTokens: maxTokens.trim() === "" ? null : Number(maxTokens),
+          workspacePath,
+          profiles,
+          activeProfile,
         }),
       });
       const data = await res.json();
@@ -286,6 +353,57 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
               <datalist id="drawer-model-options">
                 {test?.models.map((m) => <option key={m} value={m} />)}
               </datalist>
+
+              {/* 模型配置档/生成参数/工作区（harness P0 §5） */}
+              <div className="mt-4 border-t border-neutral-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium">模型配置档</div>
+                  <div className="flex gap-1.5">
+                    <select
+                      value={activeProfile}
+                      onChange={(e) => switchProfile(e.target.value)}
+                      className="rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none"
+                    >
+                      <option value="">（当前手动配置）</option>
+                      {(profiles ?? []).map((p) => (
+                        <option key={p.name} value={p.name}>{p.name}</option>
+                      ))}
+                    </select>
+                    <button onClick={newProfile} className="rounded-lg border border-neutral-200 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50">存为新档</button>
+                    <button onClick={deleteProfile} disabled={!activeProfile} className="rounded-lg border border-neutral-200 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50 disabled:opacity-40">删除档</button>
+                  </div>
+                </div>
+                <p className="mt-1 text-xs text-neutral-400">多档保存/一键切换；切换后对话立即生效，Key 始终存服务端不回显。</p>
+              </div>
+
+              <Field label="生成参数（可选）" hint="留空 = 模型默认">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-neutral-500">temperature</span>
+                  <input
+                    type="range" min="0" max="2" step="0.1"
+                    value={temperature === "" ? 1 : Number(temperature)}
+                    onChange={(e) => setTemperature(e.target.value)}
+                    className="flex-1"
+                  />
+                  <span className="num w-8 text-xs text-neutral-600">{temperature === "" ? "默认" : Number(temperature).toFixed(1)}</span>
+                  <span className="text-xs text-neutral-500">max_tokens</span>
+                  <input
+                    value={maxTokens}
+                    onChange={(e) => setMaxTokens(e.target.value.replace(/\D/g, ""))}
+                    placeholder="默认"
+                    className="w-20 rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none focus:border-neutral-400"
+                  />
+                </div>
+              </Field>
+
+              <Field label="工作区路径" hint="留空 = 默认 data/workspace；文件/命令工具的根目录">
+                <input
+                  value={workspacePath}
+                  onChange={(e) => setWorkspacePath(e.target.value)}
+                  placeholder="留空用默认"
+                  className="mono w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-neutral-400"
+                />
+              </Field>
 
               {/* 翻译上游 */}
               <div className="rounded-lg border border-neutral-200 p-3.5">

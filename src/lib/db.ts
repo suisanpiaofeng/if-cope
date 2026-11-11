@@ -244,6 +244,21 @@ export type ModelSettings = {
   workspacePath?: string;
   /** 确认模式（harness P0）：writes=写操作需确认（默认）/ all=全部确认 / none=全自动 */
   confirmMode?: "writes" | "all" | "none";
+  /** 生成参数（空 = 走模型默认） */
+  temperature?: number;
+  maxTokens?: number;
+  /** 模型配置档（多档保存/切换；主字段始终为当前生效值） */
+  profiles?: ModelProfile[];
+  activeProfile?: string;
+};
+
+export type ModelProfile = {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  chatModel: string;
+  temperature?: number;
+  maxTokens?: number;
 };
 
 const EMPTY: ModelSettings = {
