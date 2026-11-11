@@ -69,6 +69,36 @@ export function buildSkillsIndexText(skills: ParsedSkill[]): string {
   return lines.join("\n");
 }
 
+/** load_skill 工具定义（chat 的 TOOLS 与 ask 的 MAP_TOOLS 共用一份） */
+export const SKILL_TOOL = {
+  type: "function",
+  function: {
+    name: "load_skill",
+    description: "加载一个技能（SKILL.md 任务指令包）的完整正文。当学生的任务匹配 <skills> 索引中某技能的 description 时，先加载并遵循其步骤执行",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string", description: "技能名（从 <skills> 索引里选）" } },
+      required: ["name"],
+    },
+  },
+} as const;
+
+/** 执行 load_skill：命中返回正文；本次任务已加载过则去重提示；未知/禁用 throw（信息含可用清单，失败不记去重） */
+export function executeLoadSkill(args: Record<string, unknown>, ctx: { loadedSkills?: Set<string> }): string {
+  const name = String(args?.name ?? "").trim();
+  if (!name) throw new Error("缺少技能名 name");
+  if (ctx?.loadedSkills?.has(name)) {
+    return `技能《${name}》已在本次任务中加载过，请直接遵循其步骤，无需重复加载`;
+  }
+  const usable = listSkills().filter((s) => s.enabled && !s.error);
+  const skill = usable.find((s) => s.name === name);
+  if (!skill) {
+    throw new Error(`技能「${name}」不存在或已禁用。当前可用技能：${usable.map((s) => s.name).join("、") || "（无）"}`);
+  }
+  ctx?.loadedSkills?.add(name);
+  return `技能《${name}》正文：\n\n${skill.body}`;
+}
+
 // ── IO 层（Task 2）：data/skills/<name>/SKILL.md 单一数据源 ──
 
 /** 技能根目录：env 覆盖供 verify 测试隔离；默认 data/skills */

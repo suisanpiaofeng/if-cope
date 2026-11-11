@@ -2,12 +2,14 @@ import db from "@/lib/db";
 import { TOOLS } from "./tools";
 import type { TodoItem } from "./todo";
 import { resolvePrompt } from "../prompts";
+import { skillsIndexText } from "./skills";
 
 /** 环境自知的系统提示词：告诉模型"你运行在哪、这个应用是什么、有哪些模块"，
  *  并注入实时资料库状态（类目/资料/产物 + 本次对话选中的资料）。
  *  参考 TRAE/Cursor 类 AI IDE 的做法：System Context 注入 + Function Calling。 */
 
 export function buildSystemPrompt(selectedSourceIds: number[], todos: TodoItem[] = [], userSection: string = ""): string {
+  const skillsText = skillsIndexText();
   return `你是 IF.Cope 的内置 AI 助手，运行在一个校园 AI 学习工作站应用里。你不仅能答疑，还能通过工具直接操作这个应用。
 
 ## 应用结构（IF.Cope）
@@ -29,7 +31,7 @@ ${listToolsText()}
 - 工具结果就是真实执行结果，如实转告学生；失败了就说明原因。
 - 只是资料内容问答时不需要调用工具，直接基于资料片段回答。
 
-${userSection ? `${userSection}
+${skillsText}${skillsText ? "\n\n" : ""}${userSection ? `${userSection}
 
 ` : ""}<agent_loop>
 你在 Agent 循环中工作，迭代完成任务：

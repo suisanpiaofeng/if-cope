@@ -3,6 +3,7 @@ import { generateSummary } from "@/lib/artifact";
 import { webSearch, webHitsToContext } from "@/lib/webSearch";
 import { replaceTodos, type TodoItem } from "./todo";
 import { listPrefs, savePref, deletePref, countPrefs, PREFS_MAX } from "./prefs";
+import { SKILL_TOOL, executeLoadSkill } from "./skills";
 
 /** Agent 工具：OpenAI function calling 格式。
  *  定义（TOOLS）给模型看；executeTool（执行器）在服务端真实操作数据库。
@@ -11,7 +12,7 @@ import { listPrefs, savePref, deletePref, countPrefs, PREFS_MAX } from "./prefs"
 export type ToolCall = { id: string; name: string; args: Record<string, unknown> };
 
 /** 工具执行上下文（todo_write 等会话级工具需要知道归属会话） */
-export type ToolContext = { threadId: number };
+export type ToolContext = { threadId: number; loadedSkills?: Set<string> };
 
 export const TOOLS = [
   {
@@ -161,6 +162,7 @@ export const TOOLS = [
       },
     },
   },
+  SKILL_TOOL,
 ] as const;
 
 /** 执行工具调用：返回给模型的文本结果；失败抛错（由调用方转成错误文本回喂模型） */
@@ -191,6 +193,9 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
       if (!Number.isInteger(id)) throw new Error("id 必须是整数");
       return deletePref(id) ? `已删除偏好 #${id}` : `偏好 #${id} 不存在`;
     }
+
+    case "load_skill":
+      return executeLoadSkill(call.args, ctx);
 
     case "todo_write": {
       const arr = call.args.todos;

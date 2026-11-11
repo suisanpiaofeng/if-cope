@@ -19,6 +19,7 @@ export const TOOL_POLICY: Record<string, { timeoutMs: number; retry: boolean }> 
   list_preferences: { timeoutMs: 15_000, retry: true },
   delete_preference: { timeoutMs: 10_000, retry: false },
   generate_summary: { timeoutMs: 120_000, retry: false },
+  load_skill: { timeoutMs: 10_000, retry: true },
 };
 
 const DEFAULT_POLICY = { timeoutMs: 10_000, retry: false };

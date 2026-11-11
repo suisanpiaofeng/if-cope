@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseSkillFile, isValidSkillName, buildSkillsIndexText, BODY_MAX, DESC_MAX, listSkills, readSkillBody, writeSkill, deleteSkill, skillsIndexText, ensureSeedSkills } from "../src/lib/agent/skills.ts";
+import { parseSkillFile, isValidSkillName, buildSkillsIndexText, BODY_MAX, DESC_MAX, listSkills, readSkillBody, writeSkill, deleteSkill, skillsIndexText, ensureSeedSkills, executeLoadSkill } from "../src/lib/agent/skills.ts";
 
 // 隔离目录：必须在首次调用 listSkills 前生效（skillsDir() 惰性读取 env）
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "ifcope-skills-"));
@@ -89,3 +89,14 @@ assert.equal(skillsIndexText().includes("off-skill"), false, "禁用不进索引
 
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log("verify-skill-store: IO 层 OK");
+
+// 13. load_skill：命中返回正文；重复加载去重；未知/禁用 throw 且信息含可用清单
+writeSkill("demo-skill", "演示", "# 演示正文");
+const ctx = { loadedSkills: new Set() };
+const r1 = executeLoadSkill({ name: "demo-skill" }, ctx);
+assert.ok(r1.includes("# 演示正文"));
+const r2 = executeLoadSkill({ name: "demo-skill" }, ctx);
+assert.ok(r2.includes("无需重复加载"), r2); // Ruling: spec 措辞「已在本次任务中加载过」不含连续子串“已加载”，断言改钉 spec 原文
+assert.throws(() => executeLoadSkill({ name: "no-such" }, ctx), /demo-skill|可用/, "错误应含可用清单");
+executeLoadSkill({ name: "demo-skill" }, {}); // 无 ctx.loadedSkills 不去重、不崩
+console.log("verify-skill-store: load_skill OK");

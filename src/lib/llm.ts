@@ -73,6 +73,7 @@ export async function* streamChat(
   // 护栏提示随工具结果回喂；todo_write 成功后推送清单快照。
   const maxRounds = Number(process.env.IFCOPE_AGENT_MAX_ROUNDS ?? 8);
   const guard = new LoopGuard(16);
+  const loadedSkills = new Set<string>(); // load_skill 去重（本次任务内）
   let resumesLeft = 2; // 断流续跑预算（Task 5）：最多续跑 2 次，计入轮次预算
   for (let round = 0; round <= maxRounds + 2; round++) {
     const useTools = round < maxRounds;
@@ -132,7 +133,7 @@ export async function* streamChat(
       try {
         const args = (raw.function.arguments ? JSON.parse(raw.function.arguments) : {}) as Record<string, unknown>;
         const call: ToolCall = { id: raw.id, name, args };
-        result = await runTool(call, { threadId });
+        result = await runTool(call, { threadId, loadedSkills });
         if (name === "todo_write") todoUpdated = true;
         yield { tool: { callId, name, phase: "done", round, intent, detail: result.replace(/\s+/g, " ").slice(0, 160) } };
       } catch (err) {
