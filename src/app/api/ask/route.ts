@@ -22,6 +22,7 @@ import {
 } from "@/lib/qaMapTypes";
 import { webSearch, webHitsToContext, type WebHit } from "@/lib/webSearch";
 import { cleanLabel, decideLinks, type LinkResult } from "@/lib/qaMapLink";
+import { skillsIndexText, SKILL_TOOL, executeLoadSkill } from "@/lib/agent/skills";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -178,12 +179,14 @@ export async function POST(req: NextRequest) {
       ];
       if (body.image) userContent.push({ type: "image_url", image_url: { url: body.image } });
 
-      const withTools = Boolean(map && map.nodes.length > 0);
+      const mapTools = map && map.nodes.length > 0 ? MAP_TOOLS : [];
+      const skillsSection = skillsIndexText();
+      const activeTools = [...mapTools, ...(skillsSection ? [SKILL_TOOL] : [])];
       const reqBody: Record<string, unknown> = {
         model: s.chatModel,
-        messages: [{ role: "system", content: resolvePrompt("ask_system", PROMPT_DEFAULTS.ask_system) }, ...history, { role: "user", content: userContent }],
+        messages: [{ role: "system", content: resolvePrompt("ask_system", PROMPT_DEFAULTS.ask_system) + (skillsSection ? `\n\n${skillsSection}` : "") }, ...history, { role: "user", content: userContent }],
         temperature: 0.3,
-        ...(withTools ? { tools: MAP_TOOLS, tool_choice: "auto" } : {}),
+        ...(activeTools.length ? { tools: activeTools, tool_choice: "auto" } : {}),
       };
       let res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
         method: "POST",
@@ -191,7 +194,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify(reqBody),
       });
       // 上游不支持 tools 参数时降级：去掉 tools 重试一次（不支持 function calling 的模型走旧路径）
-      if (!res.ok && withTools && (res.status === 400 || res.status === 422)) {
+      if (!res.ok && activeTools.length && (res.status === 400 || res.status === 422)) {
         delete reqBody.tools;
         delete reqBody.tool_choice;
         res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
@@ -212,7 +215,7 @@ export async function POST(req: NextRequest) {
         choices: Array<{
           message: {
             content: string | null;
-            tool_calls?: Array<{ function: { name: string; arguments: string } }>;
+            tool_calls?: Array<{ id?: string; function: { name: string; arguments: string } }>;
           };
         }>;
       };
@@ -227,7 +230,49 @@ export async function POST(req: NextRequest) {
 
       // ── 地图操作工具：模型自主决策整理连线 / 补充卡片（不生成新卡） ──
       const tc = msg?.tool_calls?.[0];
-      if (tc && map && body.mapId != null) {
+
+      // ── 技能加载：load_skill 命中（不要求地图）→ 携正文二次请求产出最终回答（1 轮封顶，不带 tools） ──
+      let answerFromSkill = "";
+      if (tc && tc.function.name === "load_skill") {
+        let skillArgs: Record<string, unknown> = {};
+        try {
+          skillArgs = JSON.parse(tc.function.arguments || "{}");
+        } catch {
+          /* 参数损坏走错误分支 */
+        }
+        let toolResult: string;
+        try {
+          toolResult = executeLoadSkill(skillArgs, { loadedSkills: new Set() });
+        } catch (e) {
+          toolResult = `工具执行失败：${e instanceof Error ? e.message : String(e)}`;
+        }
+        const toolCallId = tc.id ?? `call_${Date.now()}`;
+        reqBody.messages = [
+          ...(reqBody.messages as unknown[]),
+          { role: "assistant", content: null, tool_calls: [{ id: toolCallId, type: "function", function: { name: "load_skill", arguments: tc.function.arguments || "{}" } }] },
+          { role: "tool", tool_call_id: toolCallId, content: toolResult },
+        ];
+        delete reqBody.tools;
+        delete reqBody.tool_choice;
+        const res2 = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
+          method: "POST",
+          headers: modelHeaders(s.apiKey),
+          body: JSON.stringify(reqBody),
+        });
+        if (!res2.ok) {
+          const errBody = await res2.text().catch(() => "");
+          throw new Error(`模型接口错误 HTTP ${res2.status}${errBody ? `：${errBody.slice(0, 200)}` : ""}`);
+        }
+        const data2 = (await res2.json()) as {
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
+          choices: Array<{ message: { content: string | null } }>;
+        };
+        answerFromSkill = (data2.choices?.[0]?.message?.content ?? "").trim();
+        recordUsage("ask", s.chatModel, data2.usage?.prompt_tokens ?? 0, data2.usage?.completion_tokens ?? estimateTokens(answerFromSkill));
+        if (!answerFromSkill) throw new Error("模型返回了空内容");
+      }
+
+      if (tc && tc.function.name !== "load_skill" && map && body.mapId != null) {
         let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(tc.function.arguments || "{}");
@@ -285,7 +330,7 @@ export async function POST(req: NextRequest) {
         // 工具执行失败：落回正常问答（不丢回答）
       }
 
-      answer = (msg?.content ?? "").trim();
+      answer = answerFromSkill || (msg?.content ?? "").trim();
       if (!answer) throw new Error("模型返回了空内容");
     }
 
