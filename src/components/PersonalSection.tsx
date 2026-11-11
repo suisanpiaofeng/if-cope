@@ -16,8 +16,7 @@ const PROMPT_LABELS: Record<string, string> = {
   chat_append: "对话追加指令",
   ask_system: "解题答疑",
   artifact_summary: "复习笔记生成",
-  map_router: "知识地图路由",
-  map_rel: "知识地图关系标注",
+  map_link: "知识连线（路由+标注）",
 };
 
 export default function PersonalSection() {

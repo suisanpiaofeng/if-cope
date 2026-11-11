@@ -11,9 +11,12 @@ import { modelEndpoint, modelHeaders } from "@/lib/modelGateway";
 import { resolvePrompt, PROMPT_DEFAULTS } from "@/lib/prompts";
 import {
   ancestorChain,
+  edgeId,
   nextNodePosition,
+  normalizeQaMap,
   type QaMapData,
   type QaMapCite,
+  type QaMapEdge,
   type QaMapNode,
 } from "@/lib/qaMapTypes";
 import { webSearch, webHitsToContext, type WebHit } from "@/lib/webSearch";
@@ -47,34 +50,28 @@ export async function POST(req: NextRequest) {
         | undefined;
       if (!row) return NextResponse.json({ error: "地图不存在" }, { status: 404 });
       try {
-        map = JSON.parse(row.content) as QaMapData;
+        map = normalizeQaMap(JSON.parse(row.content)); // 旧格式（parentId 树）自动迁移为边表
       } catch {
-        return NextResponse.json({ error: "地图数据损坏" }, { status: 500 });
+        map = null;
       }
+      if (!map) return NextResponse.json({ error: "地图数据损坏" }, { status: 500 });
     }
 
-    // ── 父节点：显式指定 > 模型判断（仅在未指定且地图非空时） ──
-    let parentId: string | null = null;
+    // ── 连线：显式追问（forcedTo）> 模型判断（仅在未指定且地图非空时）──
+    // 一次调用产出连线 + 两端内容型标注（map_link 合并旧路由/标注两次调用）
+    let links: LinkResult[] = [];
     let autoRouted = false;
     if (typeof body.parentId === "string") {
-      parentId = body.parentId;
+      links = await decideLinks(q, map?.nodes ?? [], body.parentId);
     } else if (map && map.nodes.length > 0) {
-      parentId = await decideParent(q, map.nodes);
+      links = await decideLinks(q, map.nodes);
       autoRouted = true;
     }
+    // 防御：只保留指向现存卡片的连线
+    links = links.filter((l) => map?.nodes.some((n) => n.id === l.to));
 
-    // ── 追问链上下文 ──
-    const chain = map ? ancestorChain(map.nodes, parentId ?? null) : [];
-
-    // ── 两端关系词：AI 总结（失败/未配模型回退默认，不阻塞主流程） ──
-    let relParentEnd: string | undefined;
-    let relChildEnd: string | undefined;
-    if (parentId) {
-      const parentQ = chain[chain.length - 1]?.question ?? "";
-      const labels = await describeRelation(parentQ, q || "（图片提问）");
-      relParentEnd = labels.parentEnd;
-      relChildEnd = labels.childEnd;
-    }
+    // ── 追问链上下文（全部入边祖先并集，多父全取） ──
+    const chain = map ? ancestorChain(map.nodes, map.edges, links[0]?.to ?? null) : [];
 
     // ── 检索资料（指定资源优先；否则全部可用） ──
     const readyIds = (db.prepare("SELECT id FROM sources WHERE status = 'ready'").all() as { id: number }[]).map(
@@ -157,11 +154,12 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 节点落图 ──
-    const pos = nextNodePosition(map?.nodes ?? [], parentId);
+    const sourceId = links[0]?.to ?? null;
+    const pos = nextNodePosition(map?.nodes ?? [], map?.edges ?? [], sourceId);
+    const linkedRounds = links.map((l) => map?.nodes.find((n) => n.id === l.to)?.round ?? 1);
     const node: QaMapNode = {
       id: `n${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
-      parentId,
-      round: chain.length + 1,
+      round: linkedRounds.length ? Math.max(...linkedRounds) + 1 : 1,
       title: (q || "图片提问").replace(/[?？。!！]\s*$/, "").slice(0, 24) || "提问",
       question: q || "（图片提问）",
       answer,
@@ -170,14 +168,28 @@ export async function POST(req: NextRequest) {
       y: Number.isFinite(body.y) && autoRouted === false ? Number(body.y) : pos.y,
       w: 340,
       h: 280,
-      relation: parentId ? "追问" : undefined,
-      relParentEnd,
-      relChildEnd,
     };
+
+    // ── 边落图（links → QaMapEdge，同向去重） ──
+    const newEdges: QaMapEdge[] = [];
+    const seenPair = new Set((map?.edges ?? []).map((e) => `${e.from}->${e.to}`));
+    for (const l of links) {
+      const pair = `${l.to}->${node.id}`;
+      if (seenPair.has(pair)) continue;
+      seenPair.add(pair);
+      newEdges.push({
+        id: edgeId(l.to, node.id),
+        from: l.to,
+        to: node.id,
+        ...(l.relFrom ? { relFrom: l.relFrom } : {}),
+        ...(l.relTo ? { relTo: l.relTo } : {}),
+      });
+    }
 
     let savedMapId = body.mapId ?? null;
     if (map && savedMapId != null) {
       map.nodes.push(node);
+      map.edges.push(...newEdges);
       db.prepare("UPDATE artifacts SET content = ? WHERE id = ?").run(JSON.stringify(map), savedMapId);
     } else {
       const title = node.title.slice(0, 40);
@@ -185,72 +197,76 @@ export async function POST(req: NextRequest) {
         .prepare(
           "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, 'qa-map', ?, ?, ?, ?, ?)"
         )
-        .run(null, title, JSON.stringify({ title, nodes: [node] } as QaMapData), "[]", model, Date.now());
+        .run(null, title, JSON.stringify({ title, nodes: [node], edges: newEdges } as QaMapData), "[]", model, Date.now());
       savedMapId = Number(info.lastInsertRowid);
     }
 
-    return NextResponse.json({ mapId: savedMapId, node, answer, citations, model, autoRouted, parentId, webUsed: webHits.length > 0 });
+    return NextResponse.json({ mapId: savedMapId, node, answer, citations, model, autoRouted, links: newEdges, webUsed: webHits.length > 0 });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 }
 
-/** 模型路由：追问哪张卡还是新话题；失败/未配模型时一律新话题（不乱连） */
-async function decideParent(question: string, nodes: QaMapNode[]): Promise<string | null> {
-  const s = getSettings();
-  if (!isModelConfigured(s) || !question.trim()) return null;
-  const list = nodes.map((n) => `- id=${n.id}｜${n.title}`).join("\n");
+type LinkResult = { to: string; relFrom: string; relTo: string };
+
+/** 从模型输出提取 links JSON：剥代码栅栏 → 整体解析 → 锚定 "links" 非贪婪提取。
+ *  不能用贪婪 \{[\s\S]*\}——推理型模型的 reasoning 里含杂字符会拼出非法 JSON（2026-11-11 实测）。 */
+function extractLinksJson(text: string): { links?: Array<{ to?: unknown; relFrom?: unknown; relTo?: unknown }> } | null {
+  const cleaned = text.replace(/```(?:json)?/g, "").trim();
   try {
-    const res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
-      method: "POST",
-      headers: modelHeaders(s.apiKey),
-      body: JSON.stringify({
-        model: s.chatModel,
-        messages: [
-          { role: "system", content: resolvePrompt("map_router", PROMPT_DEFAULTS.map_router) },
-          { role: "user", content: `新问题：${question}\n\n已有卡片：\n${list}` },
-        ],
-        temperature: 0,
-        max_tokens: 300,
-      }),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      choices: Array<{ message: { content?: string; reasoning_content?: string } }>;
-    };
-    // 思考型模型可能把预算花在 reasoning_content 上，合并两者找 JSON
-    const msg = data.choices?.[0]?.message;
-    const text = `${msg?.content ?? ""}\n${msg?.reasoning_content ?? ""}`;
-    const json = text.match(/\{[\s\S]*\}/)?.[0] ?? "";
-    if (!json) return null;
-    const parsed = JSON.parse(json) as { parentId?: string | number | null };
-    const pid = parsed.parentId == null ? null : String(parsed.parentId);
-    return pid && nodes.some((n) => n.id === pid) ? pid : null;
+    return JSON.parse(cleaned);
   } catch {
-    return null;
+    /* 继续尝试子串提取 */
   }
+  const m = cleaned.match(/\{\s*"links"[\s\S]*?\]\s*\}/);
+  if (m) {
+    try {
+      return JSON.parse(m[0]);
+    } catch {
+      /* 提取失败 */
+    }
+  }
+  // 兑底：reasoning 被截断时逐个提取 link 对象（容忍尾部残缺）
+  const links: Array<{ to: unknown; relFrom: unknown; relTo: unknown }> = [];
+  for (const lm of cleaned.matchAll(/\{\s*"to"\s*:\s*"([^"]+)"\s*,\s*"relFrom"\s*:\s*"([^"]*)"\s*,\s*"relTo"\s*:\s*"([^"]*)"/g)) {
+    links.push({ to: lm[1], relFrom: lm[2], relTo: lm[3] });
+  }
+  return links.length ? { links } : null;
 }
 
-/** 两端关系词总结：为新连线生成语义化的方向标签（失败回退通用词） */
-async function describeRelation(
-  parentQ: string,
-  childQ: string
-): Promise<{ parentEnd: string; childEnd: string }> {
-  const FALLBACK = { parentEnd: "追问延伸", childEnd: "上文依据" };
+const GENERIC_LABEL = /^(追问|追问延伸|延伸|相关|关联|依据|上文依据)$/;
+
+/** 内容型标注清洗：截 20 字；纯通用词置空（不显示标注，不灌水） */
+function cleanLabel(v: unknown): string {
+  const t = String(v ?? "").trim().slice(0, 20);
+  return GENERIC_LABEL.test(t) ? "" : t;
+}
+
+/** 一次调用：连线判断 + 两端内容型标注（替代旧 decideParent + describeRelation 两次调用）。
+ *  forcedTo = 追问场景固定连线目标；links 上限 3、to 校验、温度 0；失败/未配模型时：
+ *  追问场景仍建边（标注留空），新话题不乱连。 */
+async function decideLinks(q: string, nodes: QaMapNode[], forcedTo?: string): Promise<LinkResult[]> {
+  const FALLBACK: LinkResult[] = forcedTo ? [{ to: forcedTo, relFrom: "", relTo: "" }] : [];
   const s = getSettings();
   if (!isModelConfigured(s)) return FALLBACK;
   try {
+    const cardList = nodes
+      .map((n) => `${n.id}｜${n.title}｜${n.question.slice(0, 60)}｜${n.answer.replace(/\s+/g, " ").slice(0, 80)}`)
+      .join("\n");
     const res = await fetch(modelEndpoint(s.baseUrl, "chat/completions"), {
       method: "POST",
       headers: modelHeaders(s.apiKey),
       body: JSON.stringify({
         model: s.chatModel,
         messages: [
-          { role: "system", content: resolvePrompt("map_rel", PROMPT_DEFAULTS.map_rel) },
-          { role: "user", content: `父卡问题：${parentQ.slice(0, 120)}\n子卡问题：${childQ.slice(0, 120)}` },
+          { role: "system", content: resolvePrompt("map_link", PROMPT_DEFAULTS.map_link) },
+          {
+            role: "user",
+            content: `新问题：${q || "（图片提问）"}\n\n已有卡片：\n${cardList}${forcedTo ? `\n\n必须连至：${forcedTo}` : ""}`,
+          },
         ],
         temperature: 0,
-        max_tokens: 300,
+        max_tokens: 8000, // 推理型模型 reasoning_content 占预算且长度波动大，400/2000 都被思考吃光过（2026-11-11 实测）
       }),
     });
     if (!res.ok) return FALLBACK;
@@ -258,13 +274,23 @@ async function describeRelation(
       choices: Array<{ message: { content?: string; reasoning_content?: string } }>;
     };
     const msg = data.choices?.[0]?.message;
-    const text = `${msg?.content ?? ""}\n${msg?.reasoning_content ?? ""}`;
-    const json = text.match(/\{[\s\S]*\}/)?.[0] ?? "";
-    const parsed = JSON.parse(json) as { parentEnd?: string; childEnd?: string };
-    return {
-      parentEnd: (parsed.parentEnd ?? "").trim().slice(0, 8) || FALLBACK.parentEnd,
-      childEnd: (parsed.childEnd ?? "").trim().slice(0, 8) || FALLBACK.childEnd,
-    };
+    const parsed =
+      extractLinksJson(msg?.content ?? "") ?? extractLinksJson(msg?.reasoning_content ?? "");
+    if (!parsed) {
+      console.log("[map_link] JSON 解析失败 | content:", JSON.stringify(msg?.content ?? "").slice(0, 300));
+      return FALLBACK;
+    }
+    const validIds = new Set(nodes.map((n) => n.id));
+    const out: LinkResult[] = [];
+    const seen = new Set<string>();
+    for (const l of parsed.links ?? []) {
+      const to = String(l.to ?? "");
+      if (!validIds.has(to) || seen.has(to) || out.length >= 3) continue;
+      if (forcedTo && to !== forcedTo) continue;
+      seen.add(to);
+      out.push({ to, relFrom: cleanLabel(l.relFrom), relTo: cleanLabel(l.relTo) });
+    }
+    return out.length ? out : FALLBACK;
   } catch {
     return FALLBACK;
   }
