@@ -1,7 +1,9 @@
 /**
- * 知识地图（对话卡片地图）：类型 + 纯函数（客户端安全）。
- * 每次问答 = 一张卡片；追问从某张卡长出新卡并连线，逐渐形成个人知识地图。
+ * 知识地图（对话卡片地图）：类型 + 纯函数（客户端安全，零运行时依赖）。
+ * 每次问答 = 一张卡片；卡片之间以**独立边**相连（纯 DAG：可汇聚、可分支、可兄弟/双向连线，
+ * 规格 docs/superpowers/specs/2026-11-10-qa-map-graph-redesign.md）。
  * 持久化为 artifacts（type=qa-map，content=QaMapData JSON）。
+ * 旧格式（节点带 parentId 的树）导入时自动迁移为边表。
  */
 
 export type QaMapCite = {
@@ -14,8 +16,7 @@ export type QaMapCite = {
 
 export type QaMapNode = {
   id: string;
-  parentId: string | null;
-  /** 第几轮（根提问=1，追问=父轮次+1） */
+  /** 第几轮（根提问=1，追问=所连卡轮次+1） */
   round: number;
   /** 卡片标题（取问题的简短表述） */
   title: string;
@@ -28,41 +29,72 @@ export type QaMapNode = {
   /** 卡片尺寸（可拖边框调整） */
   w?: number;
   h?: number;
-  /** 与父连线的关系词（旧字段，兼容历史数据；现改为两端独立） */
-  relation?: string;
-  /** 连线父端徽标：子卡相对父卡的关系（单独可编辑，生成时由 AI 总结） */
-  relParentEnd?: string;
-  /** 连线子端徽标：父卡相对子卡的关系（单独可编辑，生成时由 AI 总结） */
-  relChildEnd?: string;
+};
+
+/** 边（语义连线）：平等无主父；同向唯一、反向允许。
+ *  relFrom = 目标卡相对源卡的关系（显示在源端）；relTo = 源卡相对目标卡（显示在目标端）。 */
+export type QaMapEdge = {
+  id: string;
+  from: string;
+  to: string;
+  relFrom?: string;
+  relTo?: string;
 };
 
 export type QaMapData = {
   title: string;
   nodes: QaMapNode[];
+  edges: QaMapEdge[];
 };
 
-/** 从某节点回溯祖先链（追问时带上文，保持对话连贯） */
-export function ancestorChain(nodes: QaMapNode[], nodeId: string | null): QaMapNode[] {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const chain: QaMapNode[] = [];
-  let cur = nodeId ? byId.get(nodeId) : undefined;
-  while (cur) {
-    chain.unshift(cur);
-    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-  }
-  return chain;
+/** 边 id：同向稳定唯一 */
+export function edgeId(from: string, to: string): string {
+  return `${from}->${to}`;
 }
 
-/** 新节点落位：追问→父卡右下方纵向堆叠；新话题→最右开新列（自动布局，免手动找空位） */
+function cleanLabel(v: unknown): string | undefined {
+  const s = String(v ?? "").trim();
+  return s ? s.slice(0, 40) : undefined;
+}
+
+/** 从某节点沿全部入边并集向上收集祖先（多父全取、去重、不含自身）。
+ *  按 round 升序输出（根/旧在前、直接父在尾）；超过 8 条取最近 8 个（round 较新优先）。 */
+export function ancestorChain(nodes: QaMapNode[], edges: QaMapEdge[], nodeId: string | null): QaMapNode[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  if (!nodeId || !byId.has(nodeId)) return [];
+  const incoming = new Map<string, string[]>();
+  for (const e of edges) {
+    if (!byId.has(e.from) || !byId.has(e.to)) continue;
+    incoming.set(e.to, [...(incoming.get(e.to) ?? []), e.from]);
+  }
+  const visited = new Set<string>([nodeId]);
+  const found: QaMapNode[] = [];
+  const queue = [nodeId];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    for (const pid of incoming.get(cur) ?? []) {
+      if (visited.has(pid)) continue;
+      visited.add(pid);
+      const p = byId.get(pid);
+      if (p) found.push(p);
+      queue.push(pid);
+    }
+  }
+  found.sort((a, b) => a.round - b.round || a.id.localeCompare(b.id));
+  return found.length > 8 ? found.slice(-8) : found;
+}
+
+/** 新节点落位：连线源右下方按出边数纵向堆叠；无源最右开新列（自动布局，免手动找空位） */
 export function nextNodePosition(
   nodes: QaMapNode[],
-  parentId: string | null
+  edges: QaMapEdge[],
+  sourceId: string | null
 ): { x: number; y: number } {
-  if (parentId) {
-    const parent = nodes.find((n) => n.id === parentId);
-    if (parent) {
-      const siblings = nodes.filter((n) => n.parentId === parentId);
-      return { x: parent.x + (parent.w ?? 340) + 90, y: parent.y + siblings.length * 320 };
+  if (sourceId) {
+    const source = nodes.find((n) => n.id === sourceId);
+    if (source) {
+      const outCount = edges.filter((e) => e.from === sourceId).length;
+      return { x: source.x + (source.w ?? 340) + 90, y: source.y + outCount * 320 };
     }
   }
   if (nodes.length === 0) return { x: 60, y: 60 };
@@ -70,67 +102,155 @@ export function nextNodePosition(
   return { x: maxX + 90, y: 60 };
 }
 
-/** 校验并整形导入的知识地图 JSON（外部文件不可全信） */
-export function normalizeQaMap(raw: unknown): QaMapData | null {
-  const obj = raw as Partial<QaMapData>;
-  if (!obj || typeof obj !== "object" || !Array.isArray(obj.nodes) || obj.nodes.length === 0) return null;
-  const seen = new Set<string>();
-  const nodes: QaMapNode[] = [];
-  for (const n of obj.nodes as Array<Partial<QaMapNode>>) {
-    const id = String(n.id ?? "").trim();
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    nodes.push({
-      id,
-      parentId: n.parentId == null ? null : String(n.parentId),
-      round: Number.isFinite(Number(n.round)) && Number(n.round) > 0 ? Number(n.round) : 1,
-      title: String(n.title ?? "卡片").slice(0, 40) || "卡片",
-      question: String(n.question ?? ""),
-      answer: String(n.answer ?? ""),
-      citations: Array.isArray(n.citations)
-        ? n.citations
-            .filter((c) => c && Number.isFinite(Number(c.sourceId)))
-            .map((c) => ({
-              n: Number(c.n) || 0,
-              sourceId: Number(c.sourceId),
-              title: String(c.title ?? "资料").slice(0, 40),
-              page: c.page == null ? null : Number(c.page),
-              quote: String(c.quote ?? "").slice(0, 60),
-            }))
-        : undefined,
-      x: Number.isFinite(Number(n.x)) ? Number(n.x) : 60,
-      y: Number.isFinite(Number(n.y)) ? Number(n.y) : 60,
-      w: Number.isFinite(Number(n.w)) ? Number(n.w) : 340,
-      h: Number.isFinite(Number(n.h)) ? Number(n.h) : 280,
-      relation: typeof n.relation === "string" && n.relation.trim() ? n.relation.trim().slice(0, 10) : undefined,
-      relParentEnd: typeof n.relParentEnd === "string" && n.relParentEnd.trim() ? n.relParentEnd.trim().slice(0, 10) : undefined,
-      relChildEnd: typeof n.relChildEnd === "string" && n.relChildEnd.trim() ? n.relChildEnd.trim().slice(0, 10) : undefined,
-    });
+/** 加 from→to 后是否成环（自 to 沿出边可达 from 即成环；自环也拒绝） */
+export function hasCycle(nodes: QaMapNode[], edges: QaMapEdge[], from: string, to: string): boolean {
+  if (from === to) return true;
+  const byId = new Set(nodes.map((n) => n.id));
+  if (!byId.has(from) || !byId.has(to)) return false;
+  const out = new Map<string, string[]>();
+  for (const e of edges) out.set(e.from, [...(out.get(e.from) ?? []), e.to]);
+  const seen = new Set<string>([to]);
+  const queue = [to];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    if (cur === from) return true;
+    for (const nxt of out.get(cur) ?? []) {
+      if (!seen.has(nxt)) {
+        seen.add(nxt);
+        queue.push(nxt);
+      }
+    }
   }
-  // 父指向不存在的节点 → 提升为根，防图断裂
-  for (const n of nodes) {
-    if (n.parentId && !seen.has(n.parentId)) n.parentId = null;
-  }
-  return { title: String(obj.title ?? "").trim().slice(0, 60) || "导入的知识地图", nodes };
+  return false;
 }
 
-/** 整张地图 → markdown（导出用） */
-export function qaMapToMarkdown(map: QaMapData): string {
-  const byParent = new Map<string | null, QaMapNode[]>();
-  for (const n of map.nodes) {
-    byParent.set(n.parentId, [...(byParent.get(n.parentId) ?? []), n]);
-  }
-  const lines: string[] = [`# ${map.title}`, ""];
-  const walk = (parent: string | null, depth: number) => {
-    for (const n of byParent.get(parent) ?? []) {
-      lines.push(`${"## ".repeat(Math.min(depth + 1, 3))}${n.title}`, "", `> ${n.question}`, "", n.answer, "");
-      for (const c of n.citations ?? []) {
-        lines.push(`📎 出处：${c.title} #${c.sourceId}${c.page != null ? ` 第${c.page}页` : ""}`);
-      }
-      lines.push("");
-      walk(n.id, depth + 1);
+/** 校验并整形导入的知识地图 JSON（外部文件不可全信）。
+ *  双格式：旧格式（节点带 parentId、无 edges）自动迁移为边；新格式校验边（去重/丢悬空/改名冲突 id）。 */
+export function normalizeQaMap(raw: unknown): QaMapData | null {
+  const obj = raw as Partial<QaMapData> & { nodes?: unknown[] };
+  if (!obj || typeof obj !== "object" || !Array.isArray(obj.nodes) || obj.nodes.length === 0) return null;
+
+  // ── 节点清洗（一律剥掉旧字段；旧字段先留给迁移用） ──
+  const seen = new Set<string>();
+  const nodes: QaMapNode[] = [];
+  const legacy = new Map<string, { parentId?: string; relation?: string; relParentEnd?: string; relChildEnd?: string }>();
+  for (const raw2 of obj.nodes as Array<Record<string, unknown>>) {
+    const id = String(raw2?.id ?? "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const parentId = raw2.parentId == null ? null : String(raw2.parentId);
+    if (parentId !== null || "relation" in raw2 || "relParentEnd" in raw2 || "relChildEnd" in raw2) {
+      legacy.set(id, {
+        parentId: parentId ?? undefined,
+        relation: typeof raw2.relation === "string" ? raw2.relation : undefined,
+        relParentEnd: typeof raw2.relParentEnd === "string" ? raw2.relParentEnd : undefined,
+        relChildEnd: typeof raw2.relChildEnd === "string" ? raw2.relChildEnd : undefined,
+      });
     }
+    nodes.push({
+      id,
+      round: Number.isFinite(Number(raw2.round)) && Number(raw2.round) > 0 ? Number(raw2.round) : 1,
+      title: String(raw2.title ?? "卡片").slice(0, 40) || "卡片",
+      question: String(raw2.question ?? ""),
+      answer: String(raw2.answer ?? ""),
+      citations: Array.isArray(raw2.citations)
+        ? (raw2.citations as unknown[])
+            .filter((c) => c && Number.isFinite(Number((c as { sourceId?: unknown }).sourceId)))
+            .map((c) => {
+              const cc = c as Record<string, unknown>;
+              return {
+                n: Number(cc.n) || 0,
+                sourceId: Number(cc.sourceId),
+                title: String(cc.title ?? "资料").slice(0, 40),
+                page: cc.page == null ? null : Number(cc.page),
+                quote: String(cc.quote ?? "").slice(0, 60),
+              };
+            })
+        : undefined,
+      x: Number.isFinite(Number(raw2.x)) ? Number(raw2.x) : 60,
+      y: Number.isFinite(Number(raw2.y)) ? Number(raw2.y) : 60,
+      w: Number.isFinite(Number(raw2.w)) ? Number(raw2.w) : 340,
+      h: Number.isFinite(Number(raw2.h)) ? Number(raw2.h) : 280,
+    });
+  }
+
+  // ── 边：旧格式迁移 / 新格式校验 ──
+  const edges: QaMapEdge[] = [];
+  const seenPair = new Set<string>();
+  const seenEdgeId = new Set<string>();
+  const push = (from: string, to: string, relFrom?: string, relTo?: string, id?: string) => {
+    if (!seen.has(from) || !seen.has(to) || from === to) return; // 悬空/自环丢弃
+    const pair = edgeId(from, to);
+    if (seenPair.has(pair)) return; // 同向去重（反向保留）
+    seenPair.add(pair);
+    let eid = (id ?? "").trim() || pair;
+    if (seenEdgeId.has(eid)) eid = pair; // id 冲突自动改名
+    if (seenEdgeId.has(eid)) return;
+    seenEdgeId.add(eid);
+    edges.push({ id: eid, from, to, ...(relFrom ? { relFrom } : {}), ...(relTo ? { relTo } : {}) });
   };
-  walk(null, 0);
+
+  if (!Array.isArray(obj.edges)) {
+    // 旧格式（树）：parentId → 边；标注 relParentEnd→relFrom、relChildEnd→relTo（relation 兜底 relFrom）
+    for (const n of nodes) {
+      const lg = legacy.get(n.id);
+      if (lg?.parentId) {
+        push(lg.parentId, n.id, cleanLabel(lg.relParentEnd ?? lg.relation), cleanLabel(lg.relChildEnd));
+      }
+    }
+  } else {
+    for (const e of obj.edges as Array<Record<string, unknown>>) {
+      const from = String(e?.from ?? "").trim();
+      const to = String(e?.to ?? "").trim();
+      push(from, to, cleanLabel(e.relFrom), cleanLabel(e.relTo), String(e.id ?? ""));
+    }
+  }
+
+  return { title: String(obj.title ?? "").trim().slice(0, 60) || "导入的知识地图", nodes, edges };
+}
+
+/** 整张地图 → markdown（导出用）：每节点取第一条入边为树边做缩进，其余入边以「关联至」附注 */
+export function qaMapToMarkdown(map: QaMapData): string {
+  const byId = new Map(map.nodes.map((n) => [n.id, n]));
+  const treeParent = new Map<string, QaMapEdge>();
+  for (const e of map.edges) {
+    if (!byId.has(e.from) || !byId.has(e.to)) continue;
+    if (!treeParent.has(e.to)) treeParent.set(e.to, e);
+  }
+  const children = new Map<string, QaMapNode[]>();
+  const roots: QaMapNode[] = [];
+  for (const n of map.nodes) {
+    const pe = treeParent.get(n.id);
+    if (pe) children.set(pe.from, [...(children.get(pe.from) ?? []), n]);
+    else roots.push(n);
+  }
+  const extra = new Map<string, QaMapEdge[]>();
+  for (const e of map.edges) {
+    if (treeParent.get(e.to)?.id !== e.id) extra.set(e.from, [...(extra.get(e.from) ?? []), e]);
+  }
+
+  const lines: string[] = [`# ${map.title}`, ""];
+  const visited = new Set<string>();
+  const walk = (node: QaMapNode, depth: number) => {
+    if (visited.has(node.id)) return;
+    visited.add(node.id);
+    const pe = treeParent.get(node.id);
+    lines.push(`${"## ".repeat(Math.min(depth + 1, 3))}${node.title}`, "");
+    if (pe?.relFrom || pe?.relTo) {
+      lines.push(`> 连线：${pe.relFrom ?? "?"} / ${pe.relTo ?? "?"}`, "");
+    }
+    lines.push(`> ${node.question}`, "", node.answer, "");
+    for (const c of node.citations ?? []) {
+      lines.push(`📎 出处：${c.title} #${c.sourceId}${c.page != null ? ` 第${c.page}页` : ""}`);
+    }
+    for (const e of extra.get(node.id) ?? []) {
+      const t = byId.get(e.to);
+      if (t) lines.push(`→ 关联至《${t.title}》${e.relFrom ? `（${e.relFrom}）` : ""}`);
+    }
+    lines.push("");
+    for (const c of children.get(node.id) ?? []) walk(c, depth + 1);
+  };
+  for (const r of roots) walk(r, 0);
+  for (const n of map.nodes) walk(n, 0); // 兜底：环/断链也不丢卡
   return lines.join("\n");
 }
