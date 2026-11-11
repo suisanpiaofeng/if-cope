@@ -24,6 +24,24 @@ const TOOL_LABELS: Record<string, string> = {
   generate_summary: "生成复习笔记",
   web_search: "联网搜索",
   todo_write: "更新任务清单",
+  load_skill: "加载技能",
+  list_files: "浏览文件",
+  read_file: "读取文件",
+  write_file: "写入文件",
+  edit_file: "修改文件",
+  search_code: "搜索代码",
+  run_command: "执行命令",
+  create_skill: "创建技能",
+  install_skill: "安装技能",
+};
+
+/** 待确认的写/危险操作卡（harness P0 §4.2） */
+type ConfirmCard = {
+  callId: string;
+  name: string;
+  args: Record<string, unknown>;
+  risk: "readonly" | "reversible" | "destructive" | "deny";
+  status: "pending" | "approved" | "rejected";
 };
 
 function timeAgo(ts: number) {
@@ -86,7 +104,7 @@ export default function ChatPanel({
   const [streaming, setStreaming] = useState(false);
   // 正在运行的任务：即使回到主界面/打开别的会话，流式仍在后台继续
   const [runThread, setRunThread] = useState<number | null>(null);
-  const [live, setLive] = useState<{ question: string; content: string; reasoning: string; citations: Citation[]; tools: LiveTool[]; run?: { round: number; maxRounds: number; intent?: string } } | null>(null);
+  const [live, setLive] = useState<{ question: string; content: string; reasoning: string; citations: Citation[]; tools: LiveTool[]; confirms: ConfirmCard[]; run?: { round: number; maxRounds: number; intent?: string } } | null>(null);
   // 任务清单独立于 live（自审修复：回答结束后面板不随 live 清空，人机共写可持续）
   const [plan, setPlan] = useState<TodoItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -159,7 +177,7 @@ export default function ChatPanel({
     setView("chat");
     setStreaming(true);
     setRunThread(threadId); // 新对话时为 null，与 threadId 一致
-    setLive({ question, content: "", reasoning: "", citations: [], tools: [] });
+    setLive({ question, content: "", reasoning: "", citations: [], tools: [], confirms: [] });
     if (!threadId) setPlan([]); // 新会话从空清单开始；已有会话保留当前清单
     // 开启一段工作：选中状态回归初始（拖入已并入勾选，一并清空）
     onSelectionReset();
@@ -190,6 +208,7 @@ export default function ChatPanel({
           }
           if (evt.citations) setLive((l) => (l ? { ...l, citations: evt.citations } : l));
           if (evt.tool) setLive((l) => (l ? { ...l, tools: mergeTool(l.tools, evt.tool) } : l));
+          if (evt.confirm) setLive((l) => (l ? { ...l, confirms: [...l.confirms, { ...evt.confirm, status: "pending" }] } : l));
           if (evt.plan) setPlan(evt.plan.todos);
           if (evt.run) setLive((l) => (l ? { ...l, run: evt.run } : l));
           if (evt.reasoning) setLive((l) => (l ? { ...l, reasoning: l.reasoning + evt.reasoning } : l));
@@ -457,6 +476,16 @@ export default function ChatPanel({
                 onChange={setPlan}
               />
             )}
+            {/* 确认卡片：写/危险操作需学生放行（destructive 二次确认） */}
+            {liveOpen && live && live.confirms.length > 0 && (
+              <div className="space-y-1.5">
+                {live.confirms.map((c) => (
+                  <ConfirmBox key={c.callId} card={c} onDone={(status) =>
+                    setLive((l) => (l ? { ...l, confirms: l.confirms.map((x) => (x.callId === c.callId ? { ...x, status } : x)) } : l))
+                  } />
+                ))}
+              </div>
+            )}
             {/* 工具调用活动：AI 正在操作资料库（移动/生成笔记等），按轮次+意图展示 */}
             {liveOpen && live && live.tools.length > 0 && (
               <div className="space-y-1 rounded-lg border border-violet-100 bg-violet-50/60 px-3 py-2">
@@ -718,6 +747,70 @@ function TodoPanel({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** 确认卡片（harness P0 §4.2）：reversible 一次点击；destructive 需二次点击「确认执行」；
+ *  服务端 60s 无响应自动拒绝（后端兜底，前端到点仅展示）。 */
+function ConfirmBox({ card, onDone }: { card: ConfirmCard; onDone: (status: "approved" | "rejected") => void }) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const danger = card.risk === "destructive";
+
+  async function decide(approve: boolean) {
+    if (busy || card.status !== "pending") return;
+    if (danger && approve && !armed) {
+      setArmed(true);
+      return;
+    }
+    setBusy(true);
+    await fetch("/api/agent/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callId: card.callId, approve }),
+    }).catch(() => null);
+    onDone(approve ? "approved" : "rejected");
+  }
+
+  const argText = Object.entries(card.args ?? {})
+    .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`)
+    .join("，");
+
+  return (
+    <div className={`rounded-lg border px-3 py-2 text-xs ${
+      danger ? "border-red-200 bg-red-50/70" : "border-amber-200 bg-amber-50/70"
+    }`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className={`font-medium ${danger ? "text-red-700" : "text-amber-700"}`}>
+            {danger ? "⚠️ 不可逆操作，需确认" : "写操作确认"}：{TOOL_LABELS[card.name] ?? card.name}
+          </div>
+          <div className="mt-0.5 truncate text-neutral-500" title={argText}>{argText || "（无参数）"}</div>
+        </div>
+        {card.status === "pending" ? (
+          <div className="flex shrink-0 gap-1.5">
+            <button
+              onClick={() => decide(true)}
+              disabled={busy}
+              className={`rounded-lg px-2.5 py-1 font-medium text-white disabled:opacity-50 ${
+                danger ? (armed ? "bg-red-600 hover:bg-red-700" : "bg-red-400 hover:bg-red-500") : "bg-neutral-900 hover:bg-neutral-700"
+              }`}>
+              {danger ? (armed ? "确认执行" : "允许") : "允许"}
+            </button>
+            <button
+              onClick={() => decide(false)}
+              disabled={busy}
+              className="rounded-lg border border-neutral-200 px-2.5 py-1 text-neutral-600 hover:bg-white disabled:opacity-50">
+              拒绝
+            </button>
+          </div>
+        ) : (
+          <span className={`shrink-0 ${card.status === "approved" ? "text-emerald-600" : "text-neutral-400"}`}>
+            {card.status === "approved" ? "✓ 已允许" : "✕ 已拒绝"}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

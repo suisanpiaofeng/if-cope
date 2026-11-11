@@ -18,6 +18,7 @@ type Settings = {
   translateApiKey?: string;
   translateModel?: string;
   userDirective?: string;
+  confirmMode?: "writes" | "all" | "none";
 };
 
 type TestResult = {
@@ -66,6 +67,16 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
   const [totals, setTotals] = useState<UsageTotals[]>([]);
   const [rows, setRows] = useState<UsageRow[]>([]);
   const [tab, setTab] = useState<"model" | "personal" | "skills">("model"); // 三段切换（自审裁决：页面原本无 Tab）
+  const [confirmMode, setConfirmMode] = useState<"writes" | "all" | "none">("writes");
+
+  async function saveConfirmMode(mode: "writes" | "all" | "none") {
+    setConfirmMode(mode);
+    await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmMode: mode }),
+    }).catch(() => null);
+  }
 
   // 打开时拉取配置与用量
   useEffect(() => {
@@ -73,6 +84,7 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
     fetch("/api/settings")
       .then((r) => r.json())
       .then((d: Settings) => {
+        setConfirmMode(d.confirmMode ?? "writes");
         setBaseUrl(d.baseUrl);
         setApiKey(d.apiKey);
         setHasKey(Boolean(d.hasKey));
@@ -370,6 +382,35 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
 
             {error && <p className="mt-2.5 text-sm text-red-600">{error}</p>}
             {saveMsg && <p className="mt-2.5 text-sm text-emerald-700">{saveMsg}</p>}
+          </section>
+
+          {/* 安全（harness P0 §4.1）：工具确认模式 */}
+          <section className="mt-6 border-t border-neutral-100 pt-5">
+            <h3 className="text-sm font-medium">安全</h3>
+            <p className="mt-1 text-xs text-neutral-400">
+              控制 AI 工具执行前是否需要你确认。危险命令（黑名单）始终拒绝，不受此设置影响。
+            </p>
+            <div className="mt-3 space-y-2">
+              {([
+                ["writes", "写操作需确认（推荐）", "文件写入/修改、安装技能、写类命令会先弹确认卡"],
+                ["all", "全部操作需确认", "连只读查询也需确认，最严格但交互重"],
+                ["none", "全自动执行", "不再弹确认卡；风险自担（写入/命令直接执行）"],
+              ] as const).map(([k, label, hint]) => (
+                <label key={k} className="flex cursor-pointer items-start gap-2 rounded-lg border border-neutral-200 px-3 py-2 hover:bg-neutral-50">
+                  <input
+                    type="radio"
+                    name="confirmMode"
+                    checked={confirmMode === k}
+                    onChange={() => saveConfirmMode(k)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm text-neutral-800">{label}</span>
+                    <span className="block text-xs text-neutral-400">{hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
           </section>
 
           {/* 用量台账 */}

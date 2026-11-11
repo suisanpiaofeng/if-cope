@@ -53,6 +53,10 @@ export async function PUT(req: NextRequest) {
     ...(body.translateModel !== undefined && { translateModel: String(body.translateModel).trim() }),
     // 用户级指令（个性化）：字段存在才更新（空串 = 清除）
     ...(body.userDirective !== undefined && { userDirective: String(body.userDirective).trim() }),
+    // 确认模式（harness P0）：writes/all/none，非法值忽略
+    ...(body.confirmMode !== undefined && ["writes", "all", "none"].includes(String(body.confirmMode))
+      ? { confirmMode: String(body.confirmMode) as "writes" | "all" | "none" }
+      : {}),
   };
 
   if (baseUrl && !/^https?:\/\//.test(baseUrl)) {

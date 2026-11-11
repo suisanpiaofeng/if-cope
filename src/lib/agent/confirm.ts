@@ -96,7 +96,9 @@ export function confirmModeAllows(mode: string, risk: Risk): boolean {
 }
 
 type Pending = { resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> };
-const pending = new Map<string, Pending>();
+// 挂 globalThis：Next.js 各路由是独立模块实例，普通模块级 Map 不跨路由共享
+const g = globalThis as { __ifcopePendingConfirms?: Map<string, Pending> };
+const pending: Map<string, Pending> = g.__ifcopePendingConfirms ?? (g.__ifcopePendingConfirms = new Map());
 
 /** 挂起一次确认；timeoutMs 后自动拒绝（防死锁） */
 export function askConfirmation(

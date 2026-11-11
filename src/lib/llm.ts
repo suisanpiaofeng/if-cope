@@ -142,7 +142,7 @@ export async function* streamChat(
           result = "工具执行被安全策略拒绝（危险操作）。请换一种安全方式，或向学生说明原因";
         } else {
           let approved = true;
-          if (confirmModeAllows(s.confirmMode ?? "writes", risk)) {
+          if (!confirmModeAllows(s.confirmMode ?? "writes", risk)) { // 免确认放行为 true，需确认时取反进入挂起流
             yield { confirm: { callId, name, args, risk } };
             approved = await askConfirmation(callId, risk, name, args);
           }

@@ -117,6 +117,9 @@ export async function POST(req: NextRequest) {
           if (part.tool) {
             send({ tool: part.tool });
           }
+          if (part.confirm) {
+            send({ confirm: part.confirm });
+          }
           if (part.plan) {
             send({ plan: part.plan });
           }
