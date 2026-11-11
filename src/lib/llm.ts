@@ -8,6 +8,7 @@ import { getTodos, type TodoItem } from "./agent/todo";
 import { listPrefs, buildUserSection } from "./agent/prefs";
 import { LoopGuard } from "./agent/loopGuards";
 import { foldHistory } from "./agent/context";
+import { classifyTool, confirmModeAllows, askConfirmation, type Risk } from "./agent/confirm";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -27,6 +28,7 @@ export type ChatEvent = {
   tool?: ToolEvent;
   plan?: { todos: TodoItem[] }; // todo_write 成功后推送清单快照（任务面板用）
   run?: { round: number; maxRounds: number; intent?: string }; // 轮次心跳
+  confirm?: { callId: string; name: string; args: Record<string, unknown>; risk: Risk }; // 待确认的写/危险操作
 };
 
 /** 发给模型的消息（含 tool_calls / tool 角色） */
@@ -133,9 +135,26 @@ export async function* streamChat(
       try {
         const args = (raw.function.arguments ? JSON.parse(raw.function.arguments) : {}) as Record<string, unknown>;
         const call: ToolCall = { id: raw.id, name, args };
-        result = await runTool(call, { threadId, loadedSkills });
-        if (name === "todo_write") todoUpdated = true;
-        yield { tool: { callId, name, phase: "done", round, intent, detail: result.replace(/\s+/g, " ").slice(0, 160) } };
+        // 三档确认（P0 T2）：deny 硬拒；reversible/destructive 按 confirmMode 挂起等学生确认
+        const risk = classifyTool(name, args);
+        if (risk === "deny") {
+          yield { tool: { callId, name, phase: "error", round, intent, detail: "命令被安全策略拒绝" } };
+          result = "工具执行被安全策略拒绝（危险操作）。请换一种安全方式，或向学生说明原因";
+        } else {
+          let approved = true;
+          if (confirmModeAllows(s.confirmMode ?? "writes", risk)) {
+            yield { confirm: { callId, name, args, risk } };
+            approved = await askConfirmation(callId, risk, name, args);
+          }
+          if (!approved) {
+            yield { tool: { callId, name, phase: "error", round, intent, detail: "学生未确认/已拒绝" } };
+            result = "学生未确认或拒绝了本次操作（为安全未执行）。请说明必要性或换一种方式，不要重复发起同样的调用";
+          } else {
+            result = await runTool(call, { threadId, loadedSkills });
+            if (name === "todo_write") todoUpdated = true;
+            yield { tool: { callId, name, phase: "done", round, intent, detail: result.replace(/\s+/g, " ").slice(0, 160) } };
+          }
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         yield { tool: { callId, name, phase: "error", round, intent, detail: msg.slice(0, 200) } };

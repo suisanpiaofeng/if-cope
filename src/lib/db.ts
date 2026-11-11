@@ -242,6 +242,8 @@ export type ModelSettings = {
   userDirective?: string;
   /** 工作区根目录（harness P0；空 = 默认 data/workspace） */
   workspacePath?: string;
+  /** 确认模式（harness P0）：writes=写操作需确认（默认）/ all=全部确认 / none=全自动 */
+  confirmMode?: "writes" | "all" | "none";
 };
 
 const EMPTY: ModelSettings = {
