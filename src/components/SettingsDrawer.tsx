@@ -3,6 +3,7 @@
 /** 设置右侧抽屉：接口配置 + 用量台账（原 /settings 独立页改造，逻辑不变） */
 import { useEffect, useState } from "react";
 import PersonalSection from "./PersonalSection";
+import SettingsSkills from "./SettingsSkills";
 
 type Settings = {
   baseUrl: string;
@@ -64,7 +65,7 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
   const [error, setError] = useState<string | null>(null);
   const [totals, setTotals] = useState<UsageTotals[]>([]);
   const [rows, setRows] = useState<UsageRow[]>([]);
-  const [tab, setTab] = useState<"model" | "personal">("model"); // 二段切换（自审裁决：页面原本无 Tab）
+  const [tab, setTab] = useState<"model" | "personal" | "skills">("model"); // 三段切换（自审裁决：页面原本无 Tab）
 
   // 打开时拉取配置与用量
   useEffect(() => {
@@ -203,7 +204,7 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
 
         {/* Tab 切换 */}
         <div className="flex gap-1 border-b border-neutral-200 px-5 pt-2">
-          {([['model', '模型接入'], ['personal', '个性化']] as const).map(([k, label]) => (
+          {([['model', '模型接入'], ['personal', '个性化'], ['skills', '技能']] as const).map(([k, label]) => (
             <button
               key={k}
               onClick={() => setTab(k)}
@@ -424,8 +425,10 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
             )}
           </section>
             </>
-          ) : (
+          ) : tab === "personal" ? (
             <PersonalSection />
+          ) : (
+            <SettingsSkills />
           )}
         </div>
       </div>
