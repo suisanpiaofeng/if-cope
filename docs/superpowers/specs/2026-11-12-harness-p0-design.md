@@ -167,3 +167,38 @@
 5. run_command：只读命令直接跑；写类命令弹强确认；黑名单命令直接拒绝
 6. 会话重命名生效并持久化；切换模型配置档后对话走新档；temperature/maxTokens 实际传给上游
 7. 工作区 `.ifcope/AGENTS.md` 内容出现在系统提示并影响回答
+
+## 9. P2 规格（2026-11-12，本批实施）
+
+> 收尾质量 + 三项生态能力。容器级沙箱维持不做（P1 已以命令策略收紧替代）；多文件编辑标签已有基础能力，增强项并入 P3 不再单列。
+
+### 9.1 收尾质量包（P0/P1 deferred minors 清偿）
+- skills 扫描 TTL 缓存（3s）+ 写删失效：`listSkills(refresh?)`，设置页「重新加载」走 refresh=true
+- `buildWorkspaceSection` 迁至 `workspace.ts`（含 AGENTS.md 读取）并进 verify-workspace-fn 单测（注入内容/缺失不注入）
+- `attemptWithRetry(fn, retry)` 抽出为纯助手（executor 使用）并单测——补 write_file 幂等重试的故障注入覆盖
+- verify-skill-store 临时目录清理收口（测试 13 后统一清理）
+
+### 9.2 工作区 zip 打包下载
+- `src/lib/agent/zip.ts`（零依赖自写 stored ZIP）：`crc32(text)`、`buildZip(entries: {path, content}[]): Buffer`（local file header + central directory + EOCD，method 0）
+- `GET /api/workspace/download?path=`：文件 → 单文件下载；目录 → 递归收集文本文件打包 zip 流（≤500 文件/≤20MB，超限报错）
+- 工作区树：目录悬停「⬇ 打包下载」
+
+### 9.3 MCP（Model Context Protocol）stdio 客户端
+- `src/lib/mcp/rpc.ts`（纯）：`encodeMessage(obj)` 换行分隔 JSON；`parseMessages(buffer)` 拆帧返回 `{msgs, rest}`
+- `src/lib/mcp/client.ts`：`McpClient`（spawn 子进程、JSON-RPC id 请求/响应、initialize→initialized→tools/list→tools/call、30s 超时）；连接池挂 globalThis（同 confirm 模式），进程退出自愈（下次调用重连）
+- settings `mcpServers?: { name, command, args, env?, enabled }[]`；设置页「MCP」小节：增删改/启用/「测试连接」（服务端 initialize+tools/list 返回工具数）
+- Agent 工具：`mcp_list_tools {}`（readonly，索引：server.tool—description）与 `mcp_call_tool { server, tool, arguments }`（**reversible**，需确认——外部工具副作用未知按保守处理）；system prompt 注入 MCP 工具索引段（复用 skills 索引模式）
+- 安全：MCP server 命令由用户配置（信任边界同 hooks）；子进程 env 用配置 env + safeEnv 白名单
+
+### 9.4 Hooks（生命周期钩子）
+- 工作区 `.ifcope/hooks.json`：`{ "pre_tool_use": [{ "command", "match"? }], "post_tool_use": [...] }`；match=工具名 glob（`*`/`run_*`），缺省 `*`
+- `src/lib/agent/hooks.ts`：`loadHooks()`（解析/校验/3s TTL 缓存）、`matchHooks(list, toolName)`（纯，进 verify）、`runPreToolHooks(name)`/`runPostToolHooks(name)`（executeCommand 执行，cwd=工作区、safeEnv、10s 超时、stripAnsi）
+- 语义：pre 非零退出 → **拦截工具**（回喂 hook 输出，denied 类）；多条 pre 按序全部通过才放行；post 为旁路观察（结果忽略、不阻塞）
+- 安全：hook 命令为用户显式配置（信任边界同 AGENTS.md），但仍过黑名单 deny 检查（classifyCommand=deny 的命令 hook 也拒跑）
+
+### 9.5 验收（P2）
+1. verify-zip-fn / verify-mcp-fn / verify-hook-fn + 既有扩展全过（verify 链 13 个脚本）+ typecheck 全绿
+2. 目录打包下载：zip 可解压、文件齐全、CRC 正确（Windows 资源管理器可打开）
+3. MCP：注册 echo 类 stdio server → 测试连接显示工具 → 对话调用 mcp_call_tool 经确认后返回真实结果
+4. Hooks：pre 拦截生效（exit 1 的 hook 阻止 write_file）、post 执行可见、黑名单命令 hook 也不跑
+5. skills 缓存后「重新加载」仍即时生效；AGENTS.md 注入有单测
