@@ -11,6 +11,7 @@ import { foldHistory } from "./agent/context";
 import { classifyTool, confirmModeAllows, askConfirmation, type Risk } from "./agent/confirm";
 import { classifyError, friendlyError } from "./agent/errors";
 import { mcpIndexText } from "./mcp/client";
+import { runPreToolHooks, runPostToolHooks } from "./agent/hooks";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -153,9 +154,17 @@ export async function* streamChat(
             yield { tool: { callId, name, phase: "error", round, intent, detail: "学生未确认/已拒绝" } };
             result = "学生未确认或拒绝了本次操作（为安全未执行）。请说明必要性或换一种方式，不要重复发起同样的调用";
           } else {
-            result = await runTool(call, { threadId, loadedSkills });
-            if (name === "todo_write") todoUpdated = true;
-            yield { tool: { callId, name, phase: "done", round, intent, detail: result.replace(/\s+/g, " ").slice(0, 160) } };
+            // pre_tool_use hook（P2 §9.4）：非零退出拦截工具
+            const hookRes = await runPreToolHooks(name).catch(() => ({ blocked: false, output: "" }));
+            if (hookRes.blocked) {
+              yield { tool: { callId, name, phase: "error", round, intent, detail: "被 pre_tool_use hook 拦截" } };
+              result = friendlyError("denied", `工具被 pre_tool_use hook 拦截：${hookRes.output.slice(0, 300)}`);
+            } else {
+              result = await runTool(call, { threadId, loadedSkills });
+              if (name === "todo_write") todoUpdated = true;
+              yield { tool: { callId, name, phase: "done", round, intent, detail: result.replace(/\s+/g, " ").slice(0, 160) } };
+              void runPostToolHooks(name).catch(() => {}); // post 旁路观察，不阻塞
+            }
           }
         }
       } catch (err) {
