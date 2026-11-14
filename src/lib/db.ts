@@ -227,6 +227,10 @@ if (!srcCols.some((c) => c.name === "origin_id")) {
 if (!srcCols.some((c) => c.name === "path")) {
   db.exec("ALTER TABLE sources ADD COLUMN path TEXT");
 }
+const artCols = db.prepare("PRAGMA table_info(artifacts)").all() as { name: string }[];
+if (!artCols.some((c) => c.name === "path")) {
+  db.exec("ALTER TABLE artifacts ADD COLUMN path TEXT");
+}
 
 export type ModelSettings = {
   baseUrl: string;

@@ -9,7 +9,7 @@ import { workspaceRoot, resolveInWorkspace, listFilesTree } from "./workspace";
 import { executeCommand } from "./command";
 import { classifyCommand } from "./confirm";
 import { reindexByPath } from "../ingest";
-import { moveSourceFile } from "../fileTree";
+import { moveSourceFile, exportArtifactToTree } from "../fileTree";
 import { getMcpClient } from "../mcp/client";
 import fs from "node:fs";
 import path from "node:path";
@@ -640,6 +640,11 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
           "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, 'summary', ?, ?, ?, ?, ?)"
         )
         .run(null, title, content, JSON.stringify(ids), model, Date.now());
+      // 产物归位（P3-3）：复习笔记导出进树
+      try {
+        const rel = exportArtifactToTree(Number(info.lastInsertRowid), title, content);
+        db.prepare("UPDATE artifacts SET path = ? WHERE id = ?").run(rel, Number(info.lastInsertRowid));
+      } catch { /* 导出失败不阻塞 */ }
       return `已生成复习笔记《${title}》并存入未归类（产物 #${info.lastInsertRowid}，基于 ${ids.length} 份资料）。内容：\n\n${content.slice(0, 6000)}`;
     }
 

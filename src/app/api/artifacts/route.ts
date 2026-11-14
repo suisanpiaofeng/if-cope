@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
+import { exportArtifactToTree } from "@/lib/fileTree";
 import { generateNote } from "@/lib/notes";
 import { isNoteKind } from "@/lib/noteKinds";
 
@@ -38,6 +39,13 @@ export async function POST(req: NextRequest) {
           "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
         )
         .run(targetCategory, kind === "qa-map" ? "qa-map" : "note", t, rawContent, JSON.stringify(sourceIds ?? []), "user", Date.now());
+      // 产物归位（P3-3）：md 产物导出进树（qa-map 等结构化产物不导出）
+      if (kind !== "qa-map") {
+        try {
+          const rel = exportArtifactToTree(Number(info.lastInsertRowid), t, rawContent);
+          db.prepare("UPDATE artifacts SET path = ? WHERE id = ?").run(rel, Number(info.lastInsertRowid));
+        } catch { /* 导出失败不阻塞产物保存 */ }
+      }
       const row = db.prepare("SELECT * FROM artifacts WHERE id = ?").get(Number(info.lastInsertRowid));
       return NextResponse.json({ ...(row as object), source_ids: sourceIds ?? [] });
     }
@@ -49,6 +57,10 @@ export async function POST(req: NextRequest) {
         "INSERT INTO artifacts (category_id, type, title, content, source_ids, model, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
       )
       .run(targetCategory, useKind, title, content, JSON.stringify(sourceIds), model, Date.now());
+    try {
+      const rel = exportArtifactToTree(Number(info.lastInsertRowid), title, content);
+      db.prepare("UPDATE artifacts SET path = ? WHERE id = ?").run(rel, Number(info.lastInsertRowid));
+    } catch { /* 导出失败不阻塞 */ }
     const row = db.prepare("SELECT * FROM artifacts WHERE id = ?").get(Number(info.lastInsertRowid));
     return NextResponse.json({ ...(row as object), source_ids: sourceIds });
   } catch (err) {

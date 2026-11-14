@@ -16,11 +16,12 @@ export type TreeNode = {
   sourceId?: number | null;
   indexed?: boolean;
   chunkCount?: number;
+  artifact?: boolean;
 };
 
 type Node = TreeNode & { children: Node[] };
 
-type FilterMode = "all" | "indexed" | "note" | "doc" | "code" | "other";
+type FilterMode = "all" | "indexed" | "note" | "doc" | "code" | "artifact" | "other";
 
 const FILTERS: Array<[FilterMode, string]> = [
   ["all", "全部"],
@@ -28,6 +29,7 @@ const FILTERS: Array<[FilterMode, string]> = [
   ["note", "笔记"],
   ["doc", "课件"],
   ["code", "代码"],
+  ["artifact", "产物"],
   ["other", "其他"],
 ];
 
@@ -92,6 +94,7 @@ export default function FileTree({
   const match = (n: TreeNode): boolean => {
     if (query && !n.path.toLowerCase().includes(query.toLowerCase())) return false;
     if (filter === "indexed") return Boolean(n.indexed);
+    if (filter === "artifact") return Boolean(n.artifact);
     if (filter !== "all") return n.type === "file" && kindOf(n) === filter;
     return true;
   };
@@ -130,6 +133,23 @@ export default function FileTree({
     else onOpenFile(n.path, n.name);
   }
 
+  async function newCourse() {
+    const name = prompt("课程名称（如 高数）")?.trim();
+    if (!name) return;
+    const r = await fetch("/api/files/template", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).catch(() => null);
+    const d = await r?.json().catch(() => null);
+    if (!r?.ok) setErr(d?.error ?? "创建失败");
+    else {
+      setMsg(`已创建课程空间「${name}」（讲义/作业/错题本/复习计划）`);
+      setExpanded((e) => ({ ...e, [name]: true }));
+      load();
+    }
+  }
+
   function Row({ node, level }: { node: Node; level: number }) {
     const isOpen = expanded[node.path];
     const dim = node.path.startsWith(".ifcope");
@@ -166,6 +186,9 @@ export default function FileTree({
           )}
           {node.type === "file" && node.sourceId && !node.indexed && (
             <span className="shrink-0 rounded bg-neutral-100 px-1 text-[9px] text-neutral-400">未入库</span>
+          )}
+          {node.type === "file" && node.artifact && (
+            <span className="shrink-0 rounded bg-violet-50 px-1 text-[9px] text-violet-600">产物</span>
           )}
           {node.type === "file" && (
             <span className="hidden shrink-0 items-center gap-1 group-hover:flex">
@@ -221,6 +244,11 @@ export default function FileTree({
           placeholder="搜索文件…"
           className="min-w-0 flex-1 rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none focus:border-neutral-400"
         />
+        <button
+          onClick={newCourse}
+          title="生成课程文件夹骨架（讲义/作业/错题本/复习计划）"
+          className="shrink-0 rounded-md border border-neutral-200 px-2 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50"
+        >＋ 课程</button>
         <button
           onClick={() => setUploadOpen(true)}
           className="shrink-0 rounded-md bg-neutral-900 px-2 py-1 text-[11px] font-medium text-white hover:bg-neutral-700"

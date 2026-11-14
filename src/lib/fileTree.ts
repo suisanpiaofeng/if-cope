@@ -62,3 +62,15 @@ export function moveSourceFile(src: { path?: string | null; filename?: string | 
   fs.renameSync(absFrom, path.join(workspaceRoot(), rel));
   return rel;
 }
+
+/** 产物归位（harness P3-3 §4.3）：markdown 产物导出为树内文件，返回相对路径并回写 artifacts.path。
+ *  以文件为准的单向导出（spec §7）；qa-map 等结构化产物不导出（有专用渲染）。 */
+export function exportArtifactToTree(artifactId: number, title: string, content: string, dirRel: string = "资料"): string {
+  const dir = path.join(workspaceRoot(), dirRel);
+  fs.mkdirSync(dir, { recursive: true });
+  const taken = new Set(fs.readdirSync(dir));
+  const name = titleToFilename(title, "md", taken);
+  const rel = `${dirRel}/${name}`;
+  fs.writeFileSync(path.join(workspaceRoot(), rel), content);
+  return rel;
+}

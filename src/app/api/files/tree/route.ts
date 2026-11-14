@@ -22,6 +22,7 @@ export type TreeNode = {
   indexed?: boolean;
   chunkCount?: number;
   status?: string;
+  artifact?: boolean;
 };
 
 /** 统一文件树数据（harness P3-1 §6）：fs 树 + sources 索引元数据合并；待迁移时先懒迁移 */
@@ -38,6 +39,11 @@ export async function GET() {
     .all() as Array<{ id: number; path: string; chunk_count: number; status: string }>) {
     meta.set(r.path.split("\\").join("/"), r);
   }
+  const artPaths = new Set(
+    (db.prepare("SELECT path FROM artifacts WHERE path IS NOT NULL").all() as Array<{ path: string }>).map((r) =>
+      r.path.split("\\").join("/")
+    )
+  );
 
   const nodes: TreeNode[] = [];
   const walk = (dirAbs: string) => {
@@ -64,6 +70,7 @@ export async function GET() {
           indexed: m ? m.status !== "skipped" && m.chunk_count > 0 : false,
           chunkCount: m?.chunk_count ?? 0,
           status: m?.status,
+          artifact: artPaths.has(rel),
         });
       }
     }
