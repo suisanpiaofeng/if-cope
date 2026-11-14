@@ -8,6 +8,7 @@ import { isEditableExt } from "@/lib/preview";
 import { downloadArtifact } from "@/lib/download";
 import NoteRenderer from "@/components/notes/NoteRenderer";
 import CodeEditor from "./CodeEditor";
+import { lineDiff } from "@/lib/agent/diff";
 import { Markdown, CodeBlock } from "./Markdown";
 
 export type SaveFileResult = {
@@ -36,6 +37,8 @@ export default function PreviewPanel({
 
   // 草稿：按 tab key 记录（切走保留，关闭时才提示丢弃）
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // 对比视图（harness P1 §7.1）：按 tab key 开关
+  const [diffView, setDiffView] = useState<Record<string, boolean>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [saveMsgs, setSaveMsgs] = useState<Record<string, { ok: boolean; text: string }>>({});
   const [downloading, setDownloading] = useState(false);
@@ -163,6 +166,14 @@ export default function PreviewPanel({
             {savingKey === activeFile.key ? "保存并重建索引中…" : "保存 (Ctrl+S)"}
           </button>
           {dirty && <span className="text-[11px] text-amber-600">未保存</span>}
+          {dirty && (
+            <button
+              onClick={() => setDiffView((d) => ({ ...d, [activeFile.key]: !d[activeFile.key] }))}
+              className="rounded-md border border-neutral-200 px-2 py-0.5 text-[11px] text-neutral-600 hover:bg-white"
+            >
+              {diffView[activeFile.key] ? "返回编辑" : "对比"}
+            </button>
+          )}
           <span className="text-[11px] text-neutral-400">
             {activeFile.fileType === "markdown" ? "左侧编辑 · 右侧实时渲染" : "直接编辑即可，保存后重建检索索引"}
           </span>
@@ -196,8 +207,22 @@ export default function PreviewPanel({
         </div>
       )}
 
-      {/* 内容区：文本类直接进编辑器；Markdown 左右分屏实时渲染；其余只读 */}
-      {canEdit && activeFile ? (
+      {/* 内容区：文本类直接进编辑器；Markdown 左右分屏实时渲染；其余只读；对比态渲染行 diff */}
+      {canEdit && activeFile && diffView[activeFile.key] ? (
+        <div className="min-h-0 flex-1 overflow-auto bg-neutral-50/40 px-4 py-3" style={{ zoom }}>
+          {lineDiff(activeFile.text ?? "", drafts[activeFile.key] ?? "").map((l, i) => (
+            <div
+              key={i}
+              className={`mono whitespace-pre-wrap rounded px-2 py-[1px] text-[11px] leading-5 ${
+                l.type === "add" ? "bg-emerald-50 text-emerald-800" : l.type === "del" ? "bg-red-50 text-red-700" : "text-neutral-500"
+              }`}
+            >
+              <span className="select-none text-neutral-300">{l.type === "add" ? "+ " : l.type === "del" ? "- " : "  "}</span>
+              {l.text || "（空行）"}
+            </div>
+          ))}
+        </div>
+      ) : canEdit && activeFile ? (
         activeFile.fileType === "markdown" ? (
           /* flex 分栏：左右各自独立滚动，右栏滚动确定到底 */
           <div className="flex min-h-0 flex-1 overflow-hidden">

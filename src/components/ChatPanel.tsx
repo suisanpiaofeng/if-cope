@@ -7,6 +7,7 @@ import { DND_MIME, readDnd } from "@/lib/dnd";
 import { NOTE_KINDS } from "@/lib/noteKinds";
 import { Markdown } from "./Markdown";
 import { mergeTool, type LiveTool } from "@/lib/agent/timeline";
+import { lineDiff, formatDiff } from "@/lib/agent/diff";
 import type { TodoItem } from "@/lib/agent/todo";
 
 type Thread = { id: number; title: string; created_at: number; message_count?: number };
@@ -777,6 +778,15 @@ function ConfirmBox({ card, onDone }: { card: ConfirmCard; onDone: (status: "app
     .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`)
     .join("，");
 
+  // diff 预览（P1 §7.1）：edit_file 显示行 diff；write_file 显示新增内容摘要
+  let diffText = "";
+  if (card.name === "edit_file" && typeof card.args?.old === "string" && typeof card.args?.new === "string") {
+    diffText = formatDiff(lineDiff(card.args.old, card.args.new), 40);
+  } else if (card.name === "write_file" && typeof card.args?.content === "string") {
+    const lines = String(card.args.content).split(/\r?\n/);
+    diffText = lines.slice(0, 10).map((l) => `+ ${l}`).join("\n") + (lines.length > 10 ? `\n……（共 ${lines.length} 行）` : "");
+  }
+
   return (
     <div className={`rounded-lg border px-3 py-2 text-xs ${
       danger ? "border-red-200 bg-red-50/70" : "border-amber-200 bg-amber-50/70"
@@ -787,6 +797,11 @@ function ConfirmBox({ card, onDone }: { card: ConfirmCard; onDone: (status: "app
             {danger ? "⚠️ 不可逆操作，需确认" : "写操作确认"}：{TOOL_LABELS[card.name] ?? card.name}
           </div>
           <div className="mt-0.5 truncate text-neutral-500" title={argText}>{argText || "（无参数）"}</div>
+          {diffText && (
+            <pre className="mono mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-white/80 p-2 text-[10px] leading-4 text-neutral-700">
+              {diffText}
+            </pre>
+          )}
         </div>
         {card.status === "pending" ? (
           <div className="flex shrink-0 gap-1.5">
