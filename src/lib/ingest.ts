@@ -19,11 +19,12 @@ export async function ingestSource(sourceId: number) {
       // 爬取成功后用页面真实标题替换 URL 标题
       if (title) db.prepare("UPDATE sources SET title = ? WHERE id = ?").run(title.slice(0, 200), sourceId);
     } else {
-      const { readFile } = await import("./storage");
+      const { sourcePath } = await import("./fileTree.ts");
+      const fs = await import("node:fs");
       const row = db
-        .prepare("SELECT filename, mime FROM sources WHERE id = ?")
-        .get(sourceId) as { filename: string; mime: string };
-      const buffer = readFile(row.filename);
+        .prepare("SELECT filename, path, mime FROM sources WHERE id = ?")
+        .get(sourceId) as { filename: string; path: string | null; mime: string };
+      const buffer = fs.readFileSync(sourcePath(row));
       // 用存储名（uuid.ext）判断类型：上传文件名可能被客户端转码
       const parsed = await parseFile(buffer, row.filename, row.mime);
       pages = parsed.pages;

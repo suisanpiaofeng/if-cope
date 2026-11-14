@@ -2,7 +2,7 @@ import fs from "fs";
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
 import { resolveTranslatedPath } from "@/lib/pdfTranslate";
-import { readFile } from "@/lib/storage";
+import { sourcePath } from "@/lib/fileTree";
 import type { AnyTranslationDoc, PdfTranslationDoc } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -32,11 +32,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   // 新链路：译文已入库为资源
   if (pdf.translatedSourceId != null) {
     const src = db
-      .prepare("SELECT filename FROM sources WHERE id = ?")
-      .get(pdf.translatedSourceId) as { filename: string } | undefined;
+      .prepare("SELECT filename, path FROM sources WHERE id = ?")
+      .get(pdf.translatedSourceId) as { filename: string; path: string | null } | undefined;
     if (src && src.filename !== "-") {
       try {
-        return streamOut(req, row, readFile(src.filename), "mono");
+        return streamOut(req, row, fs.readFileSync(sourcePath(src)), "mono");
       } catch {
         return NextResponse.json({ error: "译文资源文件已丢失，请重新翻译" }, { status: 404 });
       }

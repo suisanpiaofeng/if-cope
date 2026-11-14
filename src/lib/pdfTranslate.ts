@@ -13,6 +13,7 @@ import path from "path";
 import os from "os";
 import { execFile } from "child_process";
 import db from "./db";
+import { sourcePath } from "./fileTree";
 import { translateUpstream } from "./translate";
 import { saveFile, sha256 } from "./storage";
 import { ingestSource } from "./ingest";
@@ -51,7 +52,7 @@ export function runPdf2zh(sourceId: number): Promise<{ translatedSourceId: numbe
     if (!fs.existsSync(bin)) {
       return reject(new Error(`未找到 pdf2zh（${bin}）。安装：uv tool install --python 3.12 pdf2zh`));
     }
-    const original = path.join(process.cwd(), "data", "uploads", path.basename(storage));
+    const original = sourcePath({ filename: storage });
     if (!fs.existsSync(original)) return reject(new Error("原始 PDF 文件不存在（可能已被删除）"));
 
     const outDir = path.join(TRANSLATIONS_DIR, String(sourceId));

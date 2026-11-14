@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "node:fs";
 import db from "@/lib/db";
-import { readFile } from "@/lib/storage";
+import { sourcePath } from "@/lib/fileTree";
 import { filePreviewKind } from "@/lib/preview";
 import { parseUrl } from "@/lib/parse";
 
@@ -21,8 +22,8 @@ const MIME: Record<string, string> = {
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await ctx.params;
   const id = Number(idStr);
-  const src = db.prepare("SELECT filename, ext, source_type, url, title FROM sources WHERE id = ?").get(id) as
-    | { filename: string; ext: string; source_type: string; url: string | null; title: string }
+  const src = db.prepare("SELECT filename, path, ext, source_type, url, title FROM sources WHERE id = ?").get(id) as
+    | { filename: string; path: string | null; ext: string; source_type: string; url: string | null; title: string }
     | undefined;
   if (!src) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -69,7 +70,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   let buffer: Buffer;
   try {
-    buffer = readFile(src.filename);
+    buffer = fs.readFileSync(sourcePath(src));
   } catch {
     return NextResponse.json({ error: "原始文件已丢失" }, { status: 404 });
   }

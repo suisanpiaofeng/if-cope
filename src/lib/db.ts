@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS sources (
   note TEXT,
   page_count INTEGER NOT NULL DEFAULT 0,
   chunk_count INTEGER NOT NULL DEFAULT 0,
+  path TEXT,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chunks (
@@ -222,6 +223,9 @@ if (!msgCols.some((c) => c.name === "reasoning")) {
 const srcCols = db.prepare("PRAGMA table_info(sources)").all() as { name: string }[];
 if (!srcCols.some((c) => c.name === "origin_id")) {
   db.exec("ALTER TABLE sources ADD COLUMN origin_id INTEGER");
+}
+if (!srcCols.some((c) => c.name === "path")) {
+  db.exec("ALTER TABLE sources ADD COLUMN path TEXT");
 }
 
 export type ModelSettings = {
