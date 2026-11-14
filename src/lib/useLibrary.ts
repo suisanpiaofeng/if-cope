@@ -103,12 +103,14 @@ export function useLibrary(opts?: {
   }
 
   // ── 入库 ──
-  async function upload(files: File[], categoryId: number | null, type: string) {
+  async function upload(files: File[], categoryId: number | null, type: string, opts?: { path?: string; autoIndex?: boolean }) {
     for (const f of files) {
       const fd = new FormData();
       fd.append("file", f);
       if (categoryId != null) fd.append("categoryId", String(categoryId));
       fd.append("type", type);
+      if (opts?.path) fd.append("path", opts.path);
+      if (opts?.autoIndex === false) fd.append("autoIndex", "false");
       try {
         const res = await fetch("/api/sources", { method: "POST", body: fd });
         const data = await res.json();

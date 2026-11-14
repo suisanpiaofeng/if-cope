@@ -9,6 +9,7 @@ import { workspaceRoot, resolveInWorkspace, listFilesTree } from "./workspace";
 import { executeCommand } from "./command";
 import { classifyCommand } from "./confirm";
 import { reindexByPath } from "../ingest";
+import { moveSourceFile } from "../fileTree";
 import { getMcpClient } from "../mcp/client";
 import fs from "node:fs";
 import path from "node:path";
@@ -586,13 +587,23 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
     case "move_source": {
       const id = Number(call.args.source_id);
       const catId = call.args.category_id == null ? null : Number(call.args.category_id);
-      const src = db.prepare("SELECT id, title FROM sources WHERE id = ?").get(id) as { id: number; title: string } | undefined;
+      const src = db.prepare("SELECT id, title, path, filename, source_type FROM sources WHERE id = ?").get(id) as
+        | { id: number; title: string; path: string | null; filename: string; source_type: string }
+        | undefined;
       if (!src) throw new Error(`资料 #${id} 不存在`);
       if (catId != null) {
-        const cat = db.prepare("SELECT id FROM categories WHERE id = ?").get(catId);
+        const cat = db.prepare("SELECT id, name FROM categories WHERE id = ?").get(catId);
         if (!cat) throw new Error(`类目 #${catId} 不存在`);
       }
       db.prepare("UPDATE sources SET category_id = ? WHERE id = ?").run(catId, id);
+      // 类目=文件夹（P3-2）：文件随类目移动（内容不动，索引无需重建）
+      if (src.source_type === "file") {
+        try {
+          const catName = catId == null ? null : (db.prepare("SELECT name FROM categories WHERE id = ?").get(catId) as { name: string }).name;
+          const rel = moveSourceFile(src, catName);
+          db.prepare("UPDATE sources SET path = ? WHERE id = ?").run(rel, id);
+        } catch { /* 文件缺失/已在目标位不阻塞归类 */ }
+      }
       const catName = catId == null ? "未归类" : (db.prepare("SELECT name FROM categories WHERE id = ?").get(catId) as { name: string }).name;
       return `已把资料《${src.title}》移动到「${catName}」`;
     }

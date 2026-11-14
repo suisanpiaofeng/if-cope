@@ -15,12 +15,14 @@ export default function UploadModal({
   defaultCategoryId: number | null;
   categories: { id: number; name: string }[];
   onClose: () => void;
-  onUpload: (files: File[], categoryId: number | null) => Promise<void>;
+  onUpload: (files: File[], categoryId: number | null, opts?: { path?: string; autoIndex?: boolean }) => Promise<void>;
   onAddLink: (url: string, categoryId: number | null) => Promise<void>;
   onAddText: (text: string, categoryId: number | null) => Promise<void>;
 }) {
   const [mode, setMode] = useState<Mode>("file");
   const [categoryId, setCategoryId] = useState<number | null>(defaultCategoryId);
+  const [savePath, setSavePath] = useState("资料");
+  const [autoIndex, setAutoIndex] = useState(true);
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
   const [drag, setDrag] = useState(false);
@@ -32,6 +34,8 @@ export default function UploadModal({
     if (open) {
       setMode("file");
       setCategoryId(defaultCategoryId);
+      setSavePath("资料");
+      setAutoIndex(true);
       setUrl(""); setText(""); setError(null); setDrag(false); setBusy(false);
     }
   }, [open, defaultCategoryId]);
@@ -49,7 +53,7 @@ export default function UploadModal({
   async function submitFiles(files: File[]) {
     if (!files.length || busy) return;
     setBusy(true); setError(null);
-    try { await onUpload(files, categoryId); onClose(); }
+    try { await onUpload(files, categoryId, { path: savePath.trim() || "资料", autoIndex }); onClose(); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   }
@@ -194,6 +198,19 @@ export default function UploadModal({
               <option value="ungrouped">未归类</option>
               {categories.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
             </select>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-neutral-500">
+            保存到
+            <input
+              value={savePath}
+              onChange={(e) => setSavePath(e.target.value)}
+              placeholder="资料"
+              className="w-24 rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs outline-none"
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-neutral-500">
+            <input type="checkbox" checked={autoIndex} onChange={(e) => setAutoIndex(e.target.checked)} />
+            自动入库（问答可用）
           </label>
           <button onClick={onClose} className="text-xs text-neutral-400 hover:text-neutral-900">取消</button>
         </div>

@@ -45,3 +45,20 @@ export function writeTreeFile(buffer: Buffer, title: string, ext: string, dirRel
   fs.writeFileSync(path.join(dir, name), buffer);
   return `${dirRel}/${name}`;
 }
+
+/** 移动资料到类目目录（类目=文件夹，P3-2 Ruling）：移文件 + 返回新相对路径。
+ *  内容不动 → 索引无需重建；目标重名自动去重命名。 */
+export function moveSourceFile(src: { path?: string | null; filename?: string | null }, categoryName: string | null): string {
+  const dirRel = (categoryName ?? "").trim().replace(/^\/+|\/+$/g, "").split("/").filter((s) => s && !s.includes("..")).join("/") || "资料";
+  const absFrom = sourcePath(src);
+  const parsed = path.parse(absFrom);
+  const dirAbs = path.join(workspaceRoot(), dirRel);
+  fs.mkdirSync(dirAbs, { recursive: true });
+  const taken = new Set(fs.readdirSync(dirAbs));
+  const finalName = taken.has(parsed.base)
+    ? titleToFilename(parsed.name, parsed.ext.replace(".", ""), taken)
+    : parsed.base;
+  const rel = `${dirRel}/${finalName}`;
+  fs.renameSync(absFrom, path.join(workspaceRoot(), rel));
+  return rel;
+}

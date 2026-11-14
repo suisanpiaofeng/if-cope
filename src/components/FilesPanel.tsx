@@ -106,7 +106,7 @@ export default function FilesPanel({
   onToggleArtifact: (id: number) => void;
   onToggleFolder: (folderId: number | "ungrouped") => void;
   onToggleAll: () => void;
-  onUpload: (files: File[], categoryId: number | null, type: string) => Promise<void>;
+  onUpload: (files: File[], categoryId: number | null, type: string, opts?: { path?: string; autoIndex?: boolean }) => Promise<void>;
   onAddLink: (url: string, categoryId: number | null) => Promise<void>;
   onAddText: (text: string, categoryId: number | null) => Promise<void>;
   onDeleteSource: (id: number) => Promise<void>;
@@ -205,8 +205,8 @@ export default function FilesPanel({
     setUploadOpen(true);
   }
 
-  async function doUpload(files: File[], categoryId: number | null) {
-    await onUpload(files, categoryId, guessType(files[0]?.name ?? ""));
+  async function doUpload(files: File[], categoryId: number | null, opts?: { path?: string; autoIndex?: boolean }) {
+    await onUpload(files, categoryId, guessType(files[0]?.name ?? ""), opts);
   }
 
   async function delCategory(e: React.MouseEvent, id: number) {

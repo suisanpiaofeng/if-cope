@@ -5,7 +5,7 @@ import Sidebar from "@/components/Sidebar";
 import FilesPanel, { type Artifact } from "@/components/FilesPanel";
 import PreviewPanel, { type PreviewTab, type SaveFileResult } from "@/components/PreviewPanel";
 import ChatPanel from "@/components/ChatPanel";
-import WorkspaceTree from "@/components/WorkspaceTree";
+import FileTree from "@/components/FileTree";
 import type { Source } from "@/lib/types";
 import { useLibrary } from "@/lib/useLibrary";
 import { filePreviewKind } from "@/lib/preview";
@@ -248,47 +248,16 @@ export default function Workspace() {
       <Sidebar configured={configured} />
 
       <div className="flex shrink-0 flex-col" style={{ width: filesW }}>
-        <div className="flex gap-1 border-b border-neutral-200 px-3 pt-2">
-          {([['library', '资料库'], ['workspace', '工作区']] as const).map(([k, label]) => (
-            <button
-              key={k}
-              onClick={() => setPanelView(k)}
-              className={`-mb-px rounded-t-md border-b-2 px-2.5 py-1.5 text-xs font-medium ${
-                panelView === k ? 'border-neutral-900 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-700'
-              }`}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="min-h-0 flex-1">
-          {panelView === "library" ? (
-        <FilesPanel
-          sources={sources}
-          artifacts={artifacts}
-          categories={categories}
-          genError={genError}
+        <FileTree
           selected={selected}
-          selectedArts={selectedArts}
-          onToggleSource={lib.toggleSelect}
-          onToggleArtifact={lib.toggleSelectArtifact}
-          onToggleFolder={lib.toggleFolderSelect}
-          onToggleAll={lib.toggleSelectAll}
+          onToggleSelect={lib.toggleSelect}
+          onOpenSource={openSourceById}
+          onOpenFile={openWsFile}
+          categories={categories}
           onUpload={lib.upload}
           onAddLink={lib.addLink}
           onAddText={lib.addText}
-          onDeleteSource={lib.removeSource}
-          onDeleteArtifact={lib.removeArtifact}
-          onDeleteCategory={lib.removeCategory}
-          onNewCategory={lib.newCategory}
-          onMoveSource={lib.moveSource}
-          onMoveArtifact={lib.moveArtifact}
-          onOpenSource={openSource}
-          onOpenArtifact={openArtifact}
         />
-          ) : (
-            <WorkspaceTree onOpenFile={openWsFile} />
-          )}
-        </div>
       </div>
 
       <Divider onPointerDown={(e) => startResize(e, "files")} />
