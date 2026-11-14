@@ -122,6 +122,16 @@ export default function WorkspaceTree({ onOpenFile }: { onOpenFile: (path: strin
         >
           <span className="shrink-0 text-[11px] text-neutral-400">{node.type === "dir" ? (isOpen ? "📂" : "📁") : "📄"}</span>
           <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-700" title={node.path}>{node.name}</span>
+          {node.type === "dir" && (
+            <a
+              href={`/api/workspace/download?path=${encodeURIComponent(node.path)}`}
+              onClick={(e) => e.stopPropagation()}
+              title="打包下载（zip）"
+              className="hidden shrink-0 text-[10px] text-neutral-400 hover:text-neutral-900 group-hover:inline"
+            >
+              ⬇ zip
+            </a>
+          )}
           {node.type === "file" && (
             <span className="hidden shrink-0 gap-1 group-hover:flex">
               <button
