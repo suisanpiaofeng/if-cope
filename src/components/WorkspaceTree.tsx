@@ -2,6 +2,7 @@
 
 /** 工作区文件树（harness P0 §3.3）：浏览/新建/上传/下载/删除（二次确认）；点击文件 → 预览/编辑 */
 import { useEffect, useState } from "react";
+import ErrorBanner from "./ErrorBanner";
 
 type WNode = { name: string; path: string; type: "dir" | "file"; size?: number; mtime?: number };
 
@@ -202,7 +203,7 @@ export default function WorkspaceTree({ onOpenFile }: { onOpenFile: (path: strin
         )}
       </div>
       {msg && <p className="px-3 pb-2 text-[11px] text-emerald-700">{msg}</p>}
-      {err && <p className="px-3 pb-2 text-[11px] text-red-600">{err}</p>}
+      {err && <div className="px-3 pb-2"><ErrorBanner message={err} /></div>}
     </div>
   );
 }

@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import PersonalSection from "./PersonalSection";
 import SettingsSkills from "./SettingsSkills";
+import ErrorBanner from "./ErrorBanner";
 
 type Settings = {
   baseUrl: string;
@@ -498,7 +499,7 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
               </div>
             )}
 
-            {error && <p className="mt-2.5 text-sm text-red-600">{error}</p>}
+            {error && <div className="mt-2.5"><ErrorBanner message={error} /></div>}
             {saveMsg && <p className="mt-2.5 text-sm text-emerald-700">{saveMsg}</p>}
           </section>
 

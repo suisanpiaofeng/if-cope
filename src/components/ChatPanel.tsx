@@ -8,6 +8,7 @@ import { NOTE_KINDS } from "@/lib/noteKinds";
 import { Markdown } from "./Markdown";
 import { mergeTool, type LiveTool } from "@/lib/agent/timeline";
 import { lineDiff, formatDiff } from "@/lib/agent/diff";
+import ErrorBanner from "./ErrorBanner";
 import type { TodoItem } from "@/lib/agent/todo";
 
 type Thread = { id: number; title: string; created_at: number; message_count?: number };
@@ -361,7 +362,7 @@ export default function ChatPanel({
   const inputBar = (
     <>
       {error && (
-        <div className="mx-4 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
+        <div className="mx-4 mb-2"><ErrorBanner message={error} /></div>
       )}
       {quickBar}
       {organizeMsg && (

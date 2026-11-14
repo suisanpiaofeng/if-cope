@@ -23,6 +23,7 @@ import {
 import { webSearch, webHitsToContext, type WebHit } from "@/lib/webSearch";
 import { cleanLabel, decideLinks, type LinkResult } from "@/lib/qaMapLink";
 import { skillsIndexText, SKILL_TOOL, executeLoadSkill } from "@/lib/agent/skills";
+import { classifyError, friendlyError } from "@/lib/agent/errors";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -245,7 +246,8 @@ export async function POST(req: NextRequest) {
         try {
           toolResult = executeLoadSkill(skillArgs, { loadedSkills: new Set() });
         } catch (e) {
-          toolResult = `工具执行失败：${e instanceof Error ? e.message : String(e)}`;
+          const msg = e instanceof Error ? e.message : String(e);
+          toolResult = friendlyError(classifyError(msg), msg);
         }
         const toolCallId = tc.id ?? `call_${Date.now()}`;
         reqBody.messages = [

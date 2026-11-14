@@ -3,6 +3,7 @@
 /** 技能 Tab（harness P0 §2.4）：上传 .md/文件夹/拖拽安装、冲突弹窗（覆盖/重命名/跳过）、
  *  详情展开、启停/编辑/删除（二次确认）、重新加载。 */
 import { useEffect, useRef, useState } from "react";
+import ErrorBanner from "./ErrorBanner";
 
 type Skill = { name: string; description: string; enabled: boolean; body: string; triggers?: string; params?: string; error?: string };
 type ImportItem = { path: string; content: string };
@@ -465,7 +466,7 @@ export default function SettingsSkills() {
         </div>
 
         {busy && <p className="mt-2.5 text-xs text-neutral-400">处理中…</p>}
-        {err && <p className="mt-2.5 text-sm text-red-600">{err}</p>}
+        {err && <div className="mt-2.5"><ErrorBanner message={err} /></div>}
         {msg && <p className="mt-2.5 text-sm text-emerald-700">{msg}</p>}
       </section>
     </div>

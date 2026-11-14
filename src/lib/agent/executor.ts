@@ -22,9 +22,9 @@ export const TOOL_POLICY: Record<string, { timeoutMs: number; retry: boolean }> 
   load_skill: { timeoutMs: 10_000, retry: true },
   list_files: { timeoutMs: 10_000, retry: true },
   read_file: { timeoutMs: 10_000, retry: true },
-  write_file: { timeoutMs: 10_000, retry: false },
-  edit_file: { timeoutMs: 10_000, retry: false },
   search_code: { timeoutMs: 15_000, retry: true },
+  write_file: { timeoutMs: 10_000, retry: true }, // 同参重写幂等（P1 §7.3），重试安全
+  edit_file: { timeoutMs: 10_000, retry: false },
   create_skill: { timeoutMs: 10_000, retry: false },
   install_skill: { timeoutMs: 15_000, retry: false },
   run_command: { timeoutMs: 130_000, retry: false }, // 执行超时由工具自身控制（≤120s），策略层只兑底

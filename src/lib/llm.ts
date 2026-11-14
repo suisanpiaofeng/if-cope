@@ -9,6 +9,7 @@ import { listPrefs, buildUserSection } from "./agent/prefs";
 import { LoopGuard } from "./agent/loopGuards";
 import { foldHistory } from "./agent/context";
 import { classifyTool, confirmModeAllows, askConfirmation, type Risk } from "./agent/confirm";
+import { classifyError, friendlyError } from "./agent/errors";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -76,7 +77,7 @@ export async function* streamChat(
   const maxRounds = Number(process.env.IFCOPE_AGENT_MAX_ROUNDS ?? 8);
   const guard = new LoopGuard(16);
   const loadedSkills = new Set<string>(); // load_skill 去重（本次任务内）
-  let resumesLeft = 2; // 断流续跑预算（Task 5）：最多续跑 2 次，计入轮次预算
+  let resumesLeft = 3; // 断流续跑预算（P1 §7.3）：最多续跑 3 次，计入轮次预算
   for (let round = 0; round <= maxRounds + 2; round++) {
     const useTools = round < maxRounds;
     messages[0] = {
@@ -158,7 +159,8 @@ export async function* streamChat(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         yield { tool: { callId, name, phase: "error", round, intent, detail: msg.slice(0, 200) } };
-        result = `工具执行失败：${msg}。请向学生说明原因，或换一种方式处理。`;
+        // 统一错误模板（P1 §7.4）：分类 + 原信息 + 修复建议，模型据此自纠
+        result = friendlyError(classifyError(msg), msg);
       }
       // 护栏提示（重复调用/预算用尽）随工具结果回喂，模型自行收敛
       const warn = guard.record(name, raw.function.arguments ?? "");
