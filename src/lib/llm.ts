@@ -137,7 +137,7 @@ export async function* streamChat(
         const args = (raw.function.arguments ? JSON.parse(raw.function.arguments) : {}) as Record<string, unknown>;
         const call: ToolCall = { id: raw.id, name, args };
         // 三档确认（P0 T2）：deny 硬拒；reversible/destructive 按 confirmMode 挂起等学生确认
-        const risk = classifyTool(name, args);
+        const risk = classifyTool(name, args, s.commandPolicy ?? "normal");
         if (risk === "deny") {
           yield { tool: { callId, name, phase: "error", round, intent, detail: "命令被安全策略拒绝" } };
           result = "工具执行被安全策略拒绝（危险操作）。请换一种安全方式，或向学生说明原因";

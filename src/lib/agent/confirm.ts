@@ -81,10 +81,21 @@ export function classifyCommand(cmd: string): Risk {
   return "reversible";
 }
 
-/** 工具分级：run_command 按命令细分；未知工具按 reversible（保守需确认） */
-export function classifyTool(name: string, args: Record<string, unknown> = {}): Risk {
-  if (name === "run_command") return classifyCommand(String(args?.command ?? ""));
+/** 工具分级：run_command 按命令细分并套 commandPolicy（P1 §7.5）；未知工具按 reversible（保守需确认） */
+export function classifyTool(name: string, args: Record<string, unknown> = {}, commandPolicy: string = "normal"): Risk {
+  if (name === "run_command") {
+    const risk = classifyCommand(String(args?.command ?? ""));
+    return commandPolicyAllows(commandPolicy, risk) ? risk : "deny";
+  }
   return TOOL_RISK[name] ?? "reversible";
+}
+
+/** 命令策略（P1 §7.5）：off 全拒；readonly 仅只读放行；normal 仅拒 deny */
+export function commandPolicyAllows(policy: string, risk: Risk): boolean {
+  if (risk === "deny") return false;
+  if (policy === "off") return false;
+  if (policy === "readonly") return risk === "readonly";
+  return true; // normal
 }
 
 /** 确认模式是否放行该风险：deny 永不放行；none 全放；writes 只放 readonly；all 全需确认 */

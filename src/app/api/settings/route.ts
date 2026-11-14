@@ -63,6 +63,10 @@ export async function PUT(req: NextRequest) {
     ...(body.confirmMode !== undefined && ["writes", "all", "none"].includes(String(body.confirmMode))
       ? { confirmMode: String(body.confirmMode) as "writes" | "all" | "none" }
       : {}),
+    // 命令策略（P1 §7.5）
+    ...(body.commandPolicy !== undefined && ["normal", "readonly", "off"].includes(String(body.commandPolicy))
+      ? { commandPolicy: String(body.commandPolicy) as "normal" | "readonly" | "off" }
+      : {}),
     // 生成参数（空串/null = 清除回默认）
     ...(body.temperature !== undefined && { temperature: body.temperature === null || body.temperature === ("" as unknown) ? undefined : Math.min(2, Math.max(0, Number(body.temperature))) }),
     ...(body.maxTokens !== undefined && { maxTokens: body.maxTokens === null || body.maxTokens === ("" as unknown) ? undefined : Math.max(1, Number(body.maxTokens) || 0) }),

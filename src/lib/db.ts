@@ -244,6 +244,8 @@ export type ModelSettings = {
   workspacePath?: string;
   /** 确认模式（harness P0）：writes=写操作需确认（默认）/ all=全部确认 / none=全自动 */
   confirmMode?: "writes" | "all" | "none";
+  /** 命令策略（harness P1 §7.5）：normal=现状 / readonly=仅只读命令 / off=禁用 run_command */
+  commandPolicy?: "normal" | "readonly" | "off";
   /** 生成参数（空 = 走模型默认） */
   temperature?: number;
   maxTokens?: number;

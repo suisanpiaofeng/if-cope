@@ -20,6 +20,7 @@ type Settings = {
   translateModel?: string;
   userDirective?: string;
   confirmMode?: "writes" | "all" | "none";
+  commandPolicy?: "normal" | "readonly" | "off";
   temperature?: number;
   maxTokens?: number;
   workspacePath?: string;
@@ -80,6 +81,16 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
   const [workspacePath, setWorkspacePath] = useState("");
   const [profiles, setProfiles] = useState<Settings["profiles"]>([]);
   const [activeProfile, setActiveProfile] = useState("");
+  const [commandPolicy, setCommandPolicy] = useState<"normal" | "readonly" | "off">("normal");
+
+  async function saveCommandPolicy(policy: "normal" | "readonly" | "off") {
+    setCommandPolicy(policy);
+    await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commandPolicy: policy }),
+    }).catch(() => null);
+  }
 
   async function saveConfirmMode(mode: "writes" | "all" | "none") {
     setConfirmMode(mode);
@@ -97,6 +108,7 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
       .then((r) => r.json())
       .then((d: Settings) => {
         setConfirmMode(d.confirmMode ?? "writes");
+        setCommandPolicy(d.commandPolicy ?? "normal");
         setTemperature(d.temperature != null ? String(d.temperature) : "");
         setMaxTokens(d.maxTokens != null ? String(d.maxTokens) : "");
         setWorkspacePath(d.workspacePath ?? "");
@@ -521,6 +533,28 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
                     name="confirmMode"
                     checked={confirmMode === k}
                     onChange={() => saveConfirmMode(k)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="block text-sm text-neutral-800">{label}</span>
+                    <span className="block text-xs text-neutral-400">{hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="mt-4 space-y-2">
+              <div className="text-xs font-medium text-neutral-600">命令执行策略（run_command）</div>
+              {([
+                ["normal", "正常（推荐）", "只读命令直跑；写类命令需确认；黑名单命令始终拒绝"],
+                ["readonly", "仅只读命令", "只允许 ls/cat/git status 等只读命令，写类/删除类一律拒绝"],
+                ["off", "禁用命令执行", "run_command 整体不可用（文件工具不受影响）"],
+              ] as const).map(([k, label, hint]) => (
+                <label key={k} className="flex cursor-pointer items-start gap-2 rounded-lg border border-neutral-200 px-3 py-2 hover:bg-neutral-50">
+                  <input
+                    type="radio"
+                    name="commandPolicy"
+                    checked={commandPolicy === k}
+                    onChange={() => saveCommandPolicy(k)}
                     className="mt-0.5"
                   />
                   <span>
