@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import db from "@/lib/db";
-import { saveFile, sha256 } from "@/lib/storage";
+import { sha256 } from "@/lib/storage";
+import { writeTreeFile } from "@/lib/fileTree";
 import { extOf } from "@/lib/parse";
 import { ingestSource } from "@/lib/ingest";
 
@@ -28,6 +29,15 @@ const MIME_EXT: Record<string, string> = {
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
 };
 
+/** 目标目录归一化（树相对路径；防穿越；缺省 资料/） */
+function normalizeDir(rel: unknown): string {
+  const segs = String(rel ?? "")
+    .replace(/^\/+|\/+$/g, "")
+    .split("/")
+    .filter((s) => s && s !== "." && !s.includes(".."));
+  return segs.join("/") || "资料";
+}
+
 export async function POST(req: NextRequest) {
   const contentType = req.headers.get("content-type") ?? "";
 
@@ -35,6 +45,7 @@ export async function POST(req: NextRequest) {
   if (contentType.includes("application/json")) {
     const body = (await req.json()) as {
       url?: string; text?: string; title?: string; categoryId?: number; type?: string;
+      path?: string; autoIndex?: boolean;
     };
     const categoryId = body.categoryId ?? null;
 
@@ -54,13 +65,14 @@ export async function POST(req: NextRequest) {
       }
       const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
       const title = body.title?.trim() || firstLine.slice(0, 40) || "粘贴的文本";
-      const storageName = saveFile(buffer, "txt");
+      const treePath = writeTreeFile(buffer, title, "txt", normalizeDir(body.path));
+      const autoIndex = body.autoIndex !== false;
       const id = insertSource({
-        title, filename: storageName, ext: "txt", mime: "text/plain",
+        title, filename: treePath.split("/").pop()!, path: treePath, ext: "txt", mime: "text/plain",
         size: buffer.length, hash, sourceType: "file", url: null,
-        categoryId, type: "笔记",
+        categoryId, type: "笔记", status: autoIndex ? "processing" : "skipped",
       });
-      await ingestSource(id);
+      if (autoIndex) await ingestSource(id);
       const src = db.prepare("SELECT status, note, page_count, chunk_count FROM sources WHERE id = ?").get(id);
       return NextResponse.json({ id, ...(src as object) });
     }
@@ -84,6 +96,8 @@ export async function POST(req: NextRequest) {
   const categoryId = form.get("categoryId") ? Number(form.get("categoryId")) : null;
   const typeRaw = String(form.get("type") ?? "其他");
   const type = ALLOWED_TYPE_MAP[typeRaw] ?? "其他";
+  const dirRel = normalizeDir(form.get("path"));
+  const autoIndex = String(form.get("autoIndex") ?? "true") !== "false";
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const hash = sha256(buffer);
@@ -99,29 +113,30 @@ export async function POST(req: NextRequest) {
   }
 
   const ext = extOf(file.name) || MIME_EXT[file.type] || "bin";
-  const storageName = saveFile(buffer, ext);
+  const treePath = writeTreeFile(buffer, file.name.replace(/\.[^.]+$/, "") || "未命名", ext, dirRel);
   const id = insertSource({
     title: file.name.replace(/\.[^.]+$/, ""),
-    filename: storageName,
+    filename: treePath.split("/").pop()!,
+    path: treePath,
     ext, mime: file.type || "application/octet-stream",
     size: buffer.length, hash, sourceType: "file", url: null,
-    categoryId, type,
+    categoryId, type, status: autoIndex ? "processing" : "skipped",
   });
 
   // 同步解析（demo 规模秒级）；失败状态落库，前端可见
-  await ingestSource(id);
+  if (autoIndex) await ingestSource(id);
   const src = db.prepare("SELECT status, note, page_count, chunk_count FROM sources WHERE id = ?").get(id);
   return NextResponse.json({ id, ...(src as object) });
 }
 
 function insertSource(p: {
-  title: string; filename: string; ext: string; mime: string; size: number;
+  title: string; filename: string; path?: string | null; ext: string; mime: string; size: number;
   hash: string; sourceType: string; url: string | null;
-  categoryId: number | null; type: string;
+  categoryId: number | null; type: string; status?: string;
 }): number {
   const info = db.prepare(
-    `INSERT INTO sources (title, filename, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?)`
-  ).run(p.title, p.filename, p.ext, p.mime, p.size, p.hash, p.sourceType, p.url, p.type, p.categoryId, Date.now());
+    `INSERT INTO sources (title, filename, path, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(p.title, p.filename, p.path ?? null, p.ext, p.mime, p.size, p.hash, p.sourceType, p.url, p.type, p.categoryId, p.status ?? "processing", Date.now());
   return Number(info.lastInsertRowid);
 }

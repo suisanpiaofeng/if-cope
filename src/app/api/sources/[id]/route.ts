@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "node:fs";
 import db from "@/lib/db";
-import { removeFile, writeFile, sha256 } from "@/lib/storage";
+import { sha256 } from "@/lib/storage";
+import { sourcePath } from "@/lib/fileTree";
 import { ingestSource } from "@/lib/ingest";
 import { isEditableExt } from "@/lib/preview";
 
@@ -11,10 +13,10 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   const { id: idStr } = await ctx.params;
   const id = Number(idStr);
   const src = db.prepare("SELECT * FROM sources WHERE id = ?").get(id) as
-    | { filename: string; source_type: string }
+    | { filename: string; path: string | null; source_type: string }
     | undefined;
   if (!src) return NextResponse.json({ error: "not found" }, { status: 404 });
-  if (src.source_type === "file") removeFile(src.filename);
+  if (src.source_type === "file") fs.rmSync(sourcePath(src), { force: true });
   db.prepare("DELETE FROM chunks WHERE source_id = ?").run(id);
   db.prepare("DELETE FROM sources WHERE id = ?").run(id);
   return NextResponse.json({ ok: true });
@@ -24,8 +26,8 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await ctx.params;
   const id = Number(idStr);
-  const src = db.prepare("SELECT filename, ext, source_type FROM sources WHERE id = ?").get(id) as
-    | { filename: string; ext: string; source_type: string }
+  const src = db.prepare("SELECT filename, path, ext, source_type FROM sources WHERE id = ?").get(id) as
+    | { filename: string; path: string | null; ext: string; source_type: string }
     | undefined;
   if (!src || src.source_type !== "file") {
     return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -40,7 +42,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 
   const buffer = Buffer.from(body.text, "utf-8");
-  writeFile(src.filename, buffer);
+  fs.writeFileSync(sourcePath(src), buffer);
   db.prepare("UPDATE sources SET sha256 = ?, size = ? WHERE id = ?").run(
     sha256(buffer), buffer.length, id
   );

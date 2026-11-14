@@ -2,6 +2,7 @@
  * 统一文件树（harness P3-1，规格 2026-11-14 §2/§3）：
  * 位置=路径；sources.path 指向树内真实文件；旧散列文件（uploads/<uuid>）迁移前由 sourcePath 兜底。
  */
+import fs from "node:fs";
 import path from "node:path";
 import { workspaceRoot } from "./agent/workspace.ts";
 
@@ -33,4 +34,14 @@ export function titleToFilename(title: string, ext: string, taken: Set<string>):
 export function sourcePath(s: { path?: string | null; filename?: string | null; storage_name?: string | null }): string {
   if (s.path) return path.join(workspaceRoot(), s.path);
   return path.join(process.cwd(), "data", "uploads", path.basename(s.filename ?? s.storage_name ?? ""));
+}
+
+/** 写入树内文件（自动去重命名，返回树相对路径）。dirRel 缺省 资料/ */
+export function writeTreeFile(buffer: Buffer, title: string, ext: string, dirRel: string = "资料"): string {
+  const dir = path.join(workspaceRoot(), dirRel);
+  fs.mkdirSync(dir, { recursive: true });
+  const taken = new Set(fs.readdirSync(dir));
+  const name = titleToFilename(title, ext, taken);
+  fs.writeFileSync(path.join(dir, name), buffer);
+  return `${dirRel}/${name}`;
 }
