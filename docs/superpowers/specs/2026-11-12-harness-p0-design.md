@@ -123,13 +123,40 @@
 - 确认超时/拒绝 → 回喂文本明确告知模型"学生未确认/已拒绝，换方案或询问学生"
 - 网络失败/模型超时：沿用退避重试+断流续跑（既有），不再新增
 
-## 7. P1 纲要（本批不实现，规格下批细化）
+## 7. P1 规格（2026-11-12 细化，本批实施）
 
-- 多文件编辑（标签页）+ 修改 diff 预览（写工具执行前 diff 确认卡）
-- 会话分支/恢复（从消息节点复制新 thread；checkpoint 回滚）
-- 工作区上传（拖拽目录批量写入）/下载（单文件+打包）
-- 长任务自愈增强：失败自动重试策略扩展到写工具（带幂等键）、修复建议提示
-- 统一错误提示组件（全站错误分类样式）、强沙箱（子进程隔离/权限收窄）
+> 范围裁定（对原纲要的两处裁剪）：①工作区打包下载（zip）不做——零依赖约束下自写 zip 收益低，留 P2/引入依赖后做；②容器级强沙箱不做——Windows 本地应用不适用，改为「命令策略收紧」（三档 commandPolicy + 子进程环境变量清理 + ANSI 清洗）。
+
+### 7.1 diff 确认卡与编辑器 diff
+- `src/lib/agent/diff.ts`：`lineDiff(oldText, newText): DiffLine[]`（LCS 行级，type: same/add/del，带行号）；`formatDiff(lines, maxLines?)` 统一格式
+- 写工具确认卡增强：edit_file 显示 old→new 行级 diff 小窗；write_file 显示新增内容摘要（前 10 行+总行数）
+- 预览/编辑器：草稿态新增「对比」开关，原内容 vs 草稿行 diff（复用 lineDiff，客户端纯函数）
+
+### 7.2 会话分支/回滚
+- `POST /api/chat/branch { threadId, beforeMessageId }`：复制该消息及之前的全部消息到新 thread（标题加「（分支）」）→ `{ newThreadId }`
+- `POST /api/chat/truncate { threadId, fromMessageId }`：删除该消息之后的全部消息（checkpoint 回滚）
+- UI：消息悬停菜单「从此分支」/「回滚到此处」（回滚=不可逆，红色二次确认）
+
+### 7.3 长任务自愈
+- executor 重试策略：write_file 同参重写幂等 → 开启重试 1 次；edit_file/move 类仍不重试
+- 断流续跑 2 → 3 次；错误回喂统一模板含分类与建议（见 7.4）
+
+### 7.4 统一错误处理
+- `src/lib/agent/errors.ts`：`classifyError(msg): "network"|"timeout"|"validation"|"denied"|"unknown"`；`friendlyError(kind, msg): string`（统一前缀+修复建议）
+- 工具失败回喂与 UI 错误条（ErrorBanner：分类色/图标/建议文案）均走该模板；接入 ChatPanel/设置页/工作区树
+
+### 7.5 沙箱强化（命令策略收紧）
+- settings `commandPolicy`: `normal`（默认，现状）/ `readonly`（仅白名单只读命令）/ `off`（禁用 run_command）；classifyTool 先查 policy，违者 deny
+- run_command 子进程环境变量白名单（PATH/SystemRoot/TEMP/TMP/HOME/USERPROFILE 等）；输出 ANSI 转义清洗（stripAnsi 纯函数）
+- 设置页「安全」小节加 commandPolicy 三选（附风险说明）
+
+### 7.6 验收（P1）
+1. verify-diff-fn / verify-error-fn 全过 + `npm run verify && npm run typecheck` 全绿（verify 链扩至 10 个）
+2. edit_file/write_file 确认卡显示真实 diff/内容摘要；拒绝后不落盘
+3. 编辑器「对比」显示行 diff；保存后 diff 清空
+4. 从消息分支出新会话（历史截断正确）；回滚到此处删除后续消息（强确认）
+5. write_file 首次失败（如目录被占）时自动重试一次；错误提示带分类与建议
+6. commandPolicy=readonly 时写类命令被拒；off 时 run_command 整体拒绝；输出无 ANSI 乱码
 
 ## 8. 验收标准（P0）
 
