@@ -11,7 +11,7 @@ import { lineDiff, formatDiff } from "@/lib/agent/diff";
 import type { TodoItem } from "@/lib/agent/todo";
 
 type Thread = { id: number; title: string; created_at: number; message_count?: number };
-type Message = { role: "user" | "assistant"; content: string; reasoning?: string; citations?: Citation[]; live?: boolean };
+type Message = { id?: number; role: "user" | "assistant"; content: string; reasoning?: string; citations?: Citation[]; live?: boolean };
 type Citation = { n: number; sourceId: number; title: string; page: number | null; quote: string };
 type PanelView = "home" | "chat" | "all";
 
@@ -52,8 +52,9 @@ function timeAgo(ts: number) {
   return `${Math.round(d / 86400_000)} 天前`;
 }
 
-function mapMsgs(data: { messages?: { role: string; content: string; reasoning?: string | null; citations: string | null }[] }): Message[] {
+function mapMsgs(data: { messages?: { id?: number; role: string; content: string; reasoning?: string | null; citations: string | null }[] }): Message[] {
   return (data.messages ?? []).map((m) => ({
+    id: m.id,
     role: m.role as Message["role"],
     content: m.content,
     reasoning: m.reasoning ?? undefined,
@@ -108,6 +109,8 @@ export default function ChatPanel({
   const [live, setLive] = useState<{ question: string; content: string; reasoning: string; citations: Citation[]; tools: LiveTool[]; confirms: ConfirmCard[]; run?: { round: number; maxRounds: number; intent?: string } } | null>(null);
   // 任务清单独立于 live（自审修复：回答结束后面板不随 live 清空，人机共写可持续）
   const [plan, setPlan] = useState<TodoItem[]>([]);
+  // 会话分支/回滚（P1 §7.2）
+  const [confirmTrunc, setConfirmTrunc] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [citation, setCitation] = useState<{ title: string; page: number | null; chunks: { page: number | null; text: string }[]; quote: string } | null>(null);
@@ -167,6 +170,41 @@ export default function ChatPanel({
     setView("home");
     setThreadId(null); threadIdRef.current = null;
     setMessages([]); setError(null);
+  }
+
+  // 会话分支：复制到指定消息为止的历史，开新会话（P1 §7.2）
+  async function branchFrom(beforeMessageId: number) {
+    if (!threadId) return;
+    const r = await fetch("/api/chat/branch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId, beforeMessageId }),
+    }).catch(() => null);
+    const d = await r?.json().catch(() => null);
+    if (d?.newThreadId) {
+      loadThreads();
+      await openThread(d.newThreadId);
+      setView("chat");
+    } else {
+      setError(d?.error ?? "分支失败，请重试");
+    }
+  }
+
+  // 会话回滚：删除指定消息之后的全部消息（不可逆，红色二次确认）
+  async function truncateFrom(fromMessageId: number) {
+    if (!threadId) return;
+    if (confirmTrunc !== fromMessageId) {
+      setConfirmTrunc(fromMessageId);
+      setTimeout(() => setConfirmTrunc((c) => (c === fromMessageId ? null : c)), 3000);
+      return;
+    }
+    setConfirmTrunc(null);
+    const r = await fetch("/api/chat/truncate", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ threadId, fromMessageId }),
+    }).catch(() => null);
+    const d = await r?.json().catch(() => null);
+    if (d?.ok) await openThread(threadId);
+    else setError(d?.error ?? "回滚失败，请重试");
   }
 
   async function ask() {
@@ -506,7 +544,19 @@ export default function ChatPanel({
               </div>
             )}
             {shown.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "flex justify-end" : "group/msg relative"}>
+              <div key={m.id ?? `live-${i}`} className={m.role === "user" ? "group/msg flex justify-end" : "group/msg relative"}>
+                {m.id && !m.live ? (
+                  <div className={`mb-1 flex gap-1.5 text-[10px] text-neutral-300 opacity-0 transition-opacity group-hover/msg:opacity-100 ${m.role === "user" ? "justify-end" : ""}`}>
+                    <button onClick={() => branchFrom(m.id!)} title="复制到此为止的历史，开新会话" className="hover:text-neutral-600">⑂ 从此分支</button>
+                    <button
+                      onClick={() => truncateFrom(m.id!)}
+                      title="删除这条之后的消息（不可逆）"
+                      className={confirmTrunc === m.id ? "text-red-500" : "hover:text-red-500"}
+                    >
+                      {confirmTrunc === m.id ? "⚠ 确认回滚？" : "⟲ 回滚到此处"}
+                    </button>
+                  </div>
+                ) : null}
                 <div className={
                   m.role === "user"
                     ? "max-w-[85%] rounded-xl bg-neutral-900 px-3.5 py-2 text-sm text-white"
