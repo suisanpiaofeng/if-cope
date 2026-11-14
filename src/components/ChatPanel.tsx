@@ -65,7 +65,7 @@ function mapMsgs(data: { messages?: { id?: number; role: string; content: string
 
 /** 最右对话栏：主界面（最近 3 条）↔ 对话视图 ↔ 全部对话；回答进行中回退不中断 */
 export default function ChatPanel({
-  sources, artifacts, selected, selectedArts, onSelectionReset, onToggleSource, onToggleArtifact, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve,
+  sources, artifacts, selected, selectedArts, onSelectionReset, onToggleSource, onToggleArtifact, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve, onOpenSourceById,
 }: {
   sources: Source[];
   /** 产物（知识地图/笔记等）：勾选/拖入同样作为问答依据 */
@@ -91,6 +91,8 @@ export default function ChatPanel({
   organizeMsg?: string | null;
   /** 打开解题答疑画布 */
   onOpenSolve?: () => void;
+  /** 引用溯源（P3-3 §4.4）：打开源文件并高亮定位 */
+  onOpenSourceById?: (id: number, quote?: string) => void;
 }) {
   const ready = sources.filter((s) => s.status === "ready");
   // 拖入对话框的视觉反馈（拖入 = 同步勾选，左侧资源栏同步显示；无独立的 dropped 集合）
@@ -114,7 +116,7 @@ export default function ChatPanel({
   const [confirmTrunc, setConfirmTrunc] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
-  const [citation, setCitation] = useState<{ title: string; page: number | null; chunks: { page: number | null; text: string }[]; quote: string } | null>(null);
+  const [citation, setCitation] = useState<{ sourceId: number; title: string; page: number | null; chunks: { page: number | null; text: string }[]; quote: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadIdRef = useRef<number | null>(null);
   useEffect(() => { threadIdRef.current = threadId; }, [threadId]);
@@ -278,7 +280,7 @@ export default function ChatPanel({
     if (!c) return;
     void fetch(`/api/lookup?sourceId=${c.sourceId}&page=${c.page}`)
       .then((r) => r.json())
-      .then((data) => setCitation({ title: data.title, page: c.page, chunks: data.chunks, quote: c.quote }))
+      .then((data) => setCitation({ sourceId: c.sourceId, title: data.title, page: c.page, chunks: data.chunks, quote: c.quote }))
       .catch(() => {});
   }, [messages, live]);
 
@@ -643,7 +645,18 @@ export default function ChatPanel({
                 {citation.title}
                 {citation.page != null && <span className="ml-2 text-sm text-neutral-500">第 {citation.page} 页</span>}
               </h3>
-              <button onClick={() => setCitation(null)} className="text-sm text-neutral-400 hover:text-neutral-900">关闭</button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    onOpenSourceById?.(citation.sourceId, citation.quote);
+                    setCitation(null);
+                  }}
+                  className="rounded-lg border border-neutral-200 px-2.5 py-1 text-sm text-neutral-600 hover:bg-neutral-50"
+                >
+                  📍 打开源文件
+                </button>
+                <button onClick={() => setCitation(null)} className="text-sm text-neutral-400 hover:text-neutral-900">关闭</button>
+              </div>
             </div>
             <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
               引用片段：{citation.quote}…

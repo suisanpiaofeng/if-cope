@@ -16,7 +16,7 @@ export type SaveFileResult = {
 };
 
 export type PreviewTab =
-  | { key: string; kind: "source"; id: number; title: string; loading?: boolean; chunks?: { page: number | null; text: string }[] }
+  | { key: string; kind: "source"; id: number; title: string; loading?: boolean; chunks?: { page: number | null; text: string }[]; highlight?: string }
   | { key: string; kind: "artifact"; id: number; title: string; artifactType?: string; loading?: boolean; markdown?: string }
   /** 原始文件预览：markdown 渲染 / 图片 / 代码高亮 / 纯文本 / pdf / docx / 网页正文 */
   | { key: string; kind: "file"; fileType: FilePreviewKind; ext: string; id: number; title: string; loading?: boolean; text?: string; html?: string; error?: string; wsPath?: string };
@@ -278,7 +278,7 @@ export default function PreviewPanel({
         ) : (
         <div style={{ zoom }}>
           {active.kind === "source" ? (
-            <SourceContent chunks={active.chunks ?? []} />
+            <SourceContent chunks={active.chunks ?? []} highlight={active.highlight} />
           ) : active.kind === "artifact" ? (
             NoteRenderer({ type: active.artifactType, content: active.markdown ?? "", onCite: (c) => onOpenSourceById?.(c.sourceId) }) ?? (
               <Markdown text={active.markdown ?? ""} />
@@ -376,15 +376,30 @@ function ImagePreview({ id, title, zoom, onReset }: {
   );
 }
 
-function SourceContent({ chunks }: { chunks: { page: number | null; text: string }[] }) {
+function SourceContent({ chunks, highlight }: { chunks: { page: number | null; text: string }[]; highlight?: string }) {
   if (chunks.length === 0)
     return <p className="pt-20 text-center text-sm text-neutral-400">该资源暂无可展示的解析文本（图片/音频需配置模型后解析）。</p>;
+  // 引用溯源（P3-3 §4.4）：定位高亮片段
+  const mark = (text: string) => {
+    if (!highlight || !text.includes(highlight)) return text;
+    const parts = text.split(highlight);
+    return parts.flatMap((p, i) =>
+      i < parts.length - 1
+        ? [p, <mark key={i} className="rounded bg-amber-100 px-0.5">{highlight}</mark>]
+        : [p]
+    );
+  };
   return (
     <div className="mx-auto max-w-[680px] space-y-4 text-sm leading-7 text-neutral-700">
+      {highlight && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
+          📍 引用定位：<span className="mono">{highlight.slice(0, 80)}</span>（已在正文高亮）
+        </div>
+      )}
       {chunks.map((c, i) => (
         <div key={i}>
           {c.page != null && <div className="num mb-1 text-[11px] text-neutral-400">第 {c.page} 页</div>}
-          <p className="whitespace-pre-wrap rounded-lg bg-neutral-50 px-4 py-3">{c.text}</p>
+          <p className="whitespace-pre-wrap rounded-lg bg-neutral-50 px-4 py-3">{mark(c.text)}</p>
         </div>
       ))}
     </div>

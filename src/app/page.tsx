@@ -86,9 +86,13 @@ export default function Workspace() {
     return data;
   }
 
-  function openSource(s: Source) {
+  function openSource(s: Source, quote?: string) {
     const key = `source-${s.id}`;
-    if (tabs.some((t) => t.key === key)) { setActiveKey(key); return; }
+    if (tabs.some((t) => t.key === key)) {
+      setActiveKey(key);
+      if (quote) setTabs((t) => t.map((x) => (x.key === key && x.kind === "source" ? { ...x, highlight: quote } : x)));
+      return;
+    }
 
     // 网页链接：爬取正文展示
     if (s.source_type === "link") {
@@ -101,9 +105,10 @@ export default function Workspace() {
       return;
     }
 
-    // 优先原始文件预览（markdown/图片/代码/txt/pdf/docx），失败或不支持时回退解析文本
+    // 优先原始文件预览（markdown/图片/代码/txt/pdf/docx），失败或不支持时回退解析文本；
+    // 引用溯源（quote）时直接走解析块视图（定位到对应块）
     const kind = s.source_type === "file" ? filePreviewKind(s.ext) : null;
-    if (kind) {
+    if (kind && !quote) {
       const streaming = kind === "image" || kind === "pdf"; // 浏览器原生渲染，无需取文本
       setTabs((t) => [...t, { key, kind: "file", fileType: kind, ext: s.ext, id: s.id, title: s.title, loading: !streaming }]);
       setActiveKey(key);
@@ -116,7 +121,7 @@ export default function Workspace() {
       return;
     }
 
-    setTabs((t) => [...t, { key, kind: "source", id: s.id, title: s.title, loading: true }]);
+    setTabs((t) => [...t, { key, kind: "source", id: s.id, title: s.title, loading: true, highlight: quote }]);
     setActiveKey(key);
     fetch(`/api/lookup?sourceId=${s.id}`)
       .then((r) => r.json())
@@ -186,9 +191,9 @@ export default function Workspace() {
   }
 
   /** 引用跳转：按 sourceId 打开源预览 */
-  function openSourceById(id: number) {
+  function openSourceById(id: number, quote?: string) {
     const s = sources.find((x) => x.id === id);
-    if (s) openSource(s);
+    if (s) openSource(s, quote);
   }
 
   useEffect(() => {
@@ -290,6 +295,7 @@ export default function Workspace() {
           organizing={organizing}
           organizeMsg={organizeMsg}
           onOpenSolve={openSolve}
+          onOpenSourceById={openSourceById}
         />
       </div>
     </div>

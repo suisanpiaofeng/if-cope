@@ -47,7 +47,7 @@ export default function FileTree({
 }: {
   selected: Set<number>;
   onToggleSelect: (id: number) => void;
-  onOpenSource: (sourceId: number) => void;
+  onOpenSource: (sourceId: number, quote?: string) => void;
   onOpenFile: (path: string, name: string) => void;
   categories: { id: number; name: string }[];
   onUpload: (files: File[], categoryId: number | null, type: string, opts?: { path?: string; autoIndex?: boolean }) => Promise<void>;
@@ -62,6 +62,8 @@ export default function FileTree({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // 双搜索（P3-3 §4.5）：语义问答结果下拉
+  const [hits, setHits] = useState<Array<{ sourceId: number; title: string; page: number | null; quote: string }>>([]);
 
   function load() {
     fetch("/api/files/tree")
@@ -72,6 +74,21 @@ export default function FileTree({
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setHits([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      fetch(`/api/files/search?q=${encodeURIComponent(q)}`)
+        .then((r) => r.json())
+        .then((d: { hits?: typeof hits }) => setHits(d.hits ?? []))
+        .catch(() => setHits([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query]);
 
   // 扁平 → 嵌套（按路径分组）
   const tree = useMemo(() => {
@@ -266,6 +283,23 @@ export default function FileTree({
           >{label}</button>
         ))}
       </div>
+
+      {/* 双搜索：语义问答结果 */}
+      {hits.length > 0 && (
+        <div className="mx-3 mb-1.5 rounded-lg border border-violet-100 bg-violet-50/50 px-2.5 py-1.5">
+          <p className="text-[10px] font-medium text-violet-500">问答结果（语义检索）</p>
+          {hits.map((h, i) => (
+            <button
+              key={i}
+              onClick={() => onOpenSource(h.sourceId, h.quote)}
+              className="mt-1 block w-full truncate text-left text-[11px] text-violet-800 hover:underline"
+              title={h.quote}
+            >
+              📚 {h.title}{h.page != null ? `（第${h.page}页）` : ""}：{h.quote.slice(0, 40)}…
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* 树 */}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
