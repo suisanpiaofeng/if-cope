@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import { workspaceRoot, resolveInWorkspace, relPath } from "@/lib/agent/workspace";
+import { reindexByPath } from "@/lib/ingest";
 
 export const runtime = "nodejs";
 
@@ -70,6 +71,8 @@ export async function PUT(req: NextRequest) {
     }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, content);
+    // 编辑联动（P3-1 §2.2）：已入库文件改动后重建索引（异步不阻塞）
+    void reindexByPath(rel.split("\\").join("/")).catch(() => {});
     return NextResponse.json({ ok: true, path: rel, size: content.length });
   } catch (e) {
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });

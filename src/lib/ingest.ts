@@ -83,3 +83,16 @@ export async function ingestSource(sourceId: number) {
     );
   }
 }
+
+/** 编辑联动（harness P3-1 §2.2）：树内文件被改写后按路径重建索引。
+ *  仅影响已入库（非 skipped）的资料；未入库文件改动不触发。fire-and-forget 由调用方决定。 */
+export async function reindexByPath(rel: string): Promise<boolean> {
+  const src = db
+    .prepare("SELECT id, status FROM sources WHERE path = ?")
+    .get(String(rel ?? "").split("\\").join("/")) as { id: number; status: string } | undefined;
+  if (!src || src.status === "skipped") return false;
+  db.prepare("DELETE FROM chunks WHERE source_id = ?").run(src.id);
+  db.prepare("UPDATE sources SET status = 'processing', note = NULL WHERE id = ?").run(src.id);
+  await ingestSource(src.id);
+  return true;
+}

@@ -8,6 +8,7 @@ import { planImport, injectName } from "./skillImport";
 import { workspaceRoot, resolveInWorkspace, listFilesTree } from "./workspace";
 import { executeCommand } from "./command";
 import { classifyCommand } from "./confirm";
+import { reindexByPath } from "../ingest";
 import { getMcpClient } from "../mcp/client";
 import fs from "node:fs";
 import path from "node:path";
@@ -482,6 +483,7 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
       }
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content);
+      void reindexByPath(rel.split("\\").join("/")).catch(() => {}); // 编辑联动重建索引（P3-1）
       return `已写入 ${rel}（${content.split(/\r?\n/).length} 行，${content.length} 字符）`;
     }
 
@@ -503,6 +505,7 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
         throw new Error(`匹配到 ${matches} 处（行号约 ${at.slice(0, 10).join(", ")}）。确认全部替换请带 replace_all:true`);
       }
       fs.writeFileSync(abs, parts.join(newText));
+      void reindexByPath(rel.split("\\").join("/")).catch(() => {}); // 编辑联动重建索引（P3-1）
       return `已替换 ${matches} 处（${rel}）`;
     }
 
