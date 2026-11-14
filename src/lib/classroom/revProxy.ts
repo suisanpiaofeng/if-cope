@@ -31,7 +31,9 @@ const WHOAMI_PATH = "/jy-application-resourcemanage/v1/web/login/acknowledge";
 /** CVS 前端首页（登录入口：加载它即可触发官方自己的认证跳转链） */
 const SPA_HOME = "/jy-application-resourcemanage-ui/";
 
-/** 剥掉的响应头（本地转发场景由我们自己说了算；Set-Cookie 不剥——登录态靠它落 localhost） */
+/** 剥掉的响应头（本地转发场景由我们自己说了算；Set-Cookie 不剥——登录态靠它落 localhost）。
+ *  www-authenticate 必剥：上游 401 带 Basic 质询会触发浏览器原生登录弹窗，
+ *  而学校登录要手机验证码，弹窗永远登不上（2026-11-12 用户反馈）——改为页面引导新页登录。 */
 const STRIP = new Set([
   "x-frame-options",
   "content-security-policy",
@@ -40,6 +42,7 @@ const STRIP = new Set([
   "x-xss-protection",
   "x-download-options",
   "x-permitted-cross-domain-policies",
+  "www-authenticate",
 ]);
 
 const ORIGIN = `http://localhost:${PORT}`;

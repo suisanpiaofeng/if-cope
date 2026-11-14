@@ -117,6 +117,20 @@ export default function ClassroomPage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [deleting, setDeleting] = useState<ClassroomCourse | null>(null);
 
+  // 需要登录时直接跳出新页登录（2026-11-12 用户反馈：学校登录要手机验证码，浏览器 Basic 弹窗永远登不上——
+  // 反代已剥 www-authenticate 根治弹窗；这里自动打开登录页，被浏览器拦截时以「登录 CVS」按钮兑底）
+  const autoLoginRef = useRef(false);
+  useEffect(() => {
+    if (loggedIn === true) {
+      autoLoginRef.current = false; // 重新登录成功后，下次过期再自动跳
+      return;
+    }
+    if ((loggedIn === false || error?.kind === "auth") && !autoLoginRef.current) {
+      autoLoginRef.current = true;
+      window.open(CVS_PROXY_BASE + "/__login", "_blank");
+    }
+  }, [loggedIn, error]);
+
   // 同意状态（存版本号：声明更新可重新拦截）
   useEffect(() => {
     setAgreed(localStorage.getItem("ifcope.classroom.agreed") === DISCLAIMER_VERSION);
@@ -377,7 +391,7 @@ export default function ClassroomPage() {
         {/* 登录态预警（2026-11-10 教训：会话过期后接口报 500/401 容易误判为平台故障，主动亮条免得用户乱试） */}
         {loggedIn === false && (
           <div className="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-5 py-2 text-[12px] text-amber-800">
-            <span>CVS 未登录或会话已过期：搜索课程 / 刷新课时 / 播放都需要有效会话。</span>
+            <span>CVS 未登录或会话已过期：已尝试在新页打开登录页（手机验证码登录）；若被浏览器拦截，请点右侧按钮。搜索/刷新/播放都需要有效会话。</span>
             <button
               onClick={() => window.open(CVS_PROXY_BASE + "/__login", "_blank")}
               className="shrink-0 rounded border border-amber-300 px-2 py-0.5 text-[11px] text-amber-700 hover:bg-amber-100">
