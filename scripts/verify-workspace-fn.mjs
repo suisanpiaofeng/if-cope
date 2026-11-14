@@ -46,3 +46,16 @@ assert.ok(fs.existsSync(path.join(TMP, "sub", "ws")), "应创建缺失目录");
 
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log("verify-workspace-fn: OK");
+
+// 6. buildWorkspaceSection（P2 T1）：AGENTS.md 注入/缺失不注入（需在 rmSync 前跑——此处复用独立临时目录）
+{
+  const T2 = fs.mkdtempSync(path.join(os.tmpdir(), "ifcope-ws2-"));
+  process.env.IFCOPE_WORKSPACE_DIR = T2;
+  const { buildWorkspaceSection } = await import("../src/lib/agent/workspace.ts");
+  assert.ok(!buildWorkspaceSection().includes("项目配置"), "无 AGENTS.md 不应注入");
+  fs.mkdirSync(path.join(T2, ".ifcope"), { recursive: true });
+  fs.writeFileSync(path.join(T2, ".ifcope", "AGENTS.md"), "【测试配置】回答带暗号X");
+  assert.ok(buildWorkspaceSection().includes("回答带暗号X"), "AGENTS.md 内容应注入");
+  fs.rmSync(T2, { recursive: true, force: true });
+}
+console.log("verify-workspace-fn: AGENTS.md 注入 OK");

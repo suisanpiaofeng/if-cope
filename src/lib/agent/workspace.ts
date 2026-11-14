@@ -63,3 +63,21 @@ export function listFilesTree(rel: string = "", depth: number = 2): FileNode[] {
   if (fs.existsSync(base) && fs.statSync(base).isDirectory()) walk(base, 1);
   return out;
 }
+
+/** 工作区上下文（harness P0 §3.1/§3.4；P2 T1 自 system.ts 迁入以便单测）：
+ *  root + 文件树摘要 + .ifcope/AGENTS.md 项目配置自动注入 */
+export function buildWorkspaceSection(): string {
+  const root = workspaceRoot();
+  const tree = listFilesTree("", 2);
+  const shown = tree.slice(0, 80);
+  const lines = shown.map((n) => `${n.type === "dir" ? "[D]" : "   "} ${n.path}${n.type === "dir" ? "/" : ""}`);
+  const more = tree.length > 80 ? `\n…共 ${tree.length} 项` : "";
+  let agents = "";
+  const agentsPath = path.join(root, ".ifcope", "AGENTS.md");
+  try {
+    if (fs.existsSync(agentsPath)) {
+      agents = `\n\n【项目配置 .ifcope/AGENTS.md（学生自定义，自动加载）】\n${fs.readFileSync(agentsPath, "utf8").slice(0, 2000)}`;
+    }
+  } catch { /* 配置读取失败不阻塞对话 */ }
+  return `<workspace>\n工作区根目录：${root}\n文件树（深度 2）：\n${lines.join("\n") || "（空工作区）"}${more}${agents}\n</workspace>`;
+}

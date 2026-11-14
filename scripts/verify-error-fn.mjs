@@ -33,3 +33,20 @@ assert.equal(stripAnsi("\x1b[31m红\x1b[0m字"), "红字");
 assert.equal(stripAnsi("普通文本"), "普通文本");
 
 console.log("verify-error-fn: OK");
+
+// 8. attemptWithRetry（P2 T1）：retry=true 首败二成；retry=false 不重试
+const { attemptWithRetry } = await import("../src/lib/agent/retry.ts");
+{
+  let n = 0;
+  const flaky = async () => { n++; if (n === 1) throw new Error("首次失败"); return "ok"; };
+  assert.equal(await attemptWithRetry(flaky, true), "ok");
+  assert.equal(n, 2, "retry=true 应重试一次");
+  let m = 0;
+  const fail = async () => { m++; throw new Error("一直失败"); };
+  await assert.rejects(() => attemptWithRetry(fail, true), /一直失败/);
+  assert.equal(m, 2, "重试上限一次");
+  let k = 0;
+  await assert.rejects(() => attemptWithRetry(async () => { k++; throw new Error("x"); }, false), /x/);
+  assert.equal(k, 1, "retry=false 不重试");
+}
+console.log("verify-error-fn: 重试助手 OK");

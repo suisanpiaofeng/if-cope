@@ -3,9 +3,9 @@ import { listSkills, writeSkill, deleteSkill, isValidSkillName } from "@/lib/age
 
 export const runtime = "nodejs";
 
-/** 技能管理 API（三期规格 §3.5）：GET 列表 / PUT 新建更新 / DELETE 删除 */
+/** 技能管理 API（三期规格 §3.5）：GET 列表（强刷，UI 要最新文件态）/ PUT 新建更新 / DELETE 删除 */
 export async function GET() {
-  return NextResponse.json({ skills: listSkills() });
+  return NextResponse.json({ skills: listSkills(true) });
 }
 
 export async function PUT(req: NextRequest) {

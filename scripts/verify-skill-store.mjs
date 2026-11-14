@@ -69,10 +69,10 @@ writeSkill("my-skill", "测试用描述", "# 正文");
 assert.equal(readSkillBody("my-skill"), "# 正文");
 assert.equal(listSkills().find((s) => s.name === "my-skill")?.description, "测试用描述");
 
-// 10. 坏文件隔离：坏的标 error，好的照常
+// 10. 坏文件隔离：坏的标 error，好的照常（fs 直改文件，需 refresh 见新态）
 fs.mkdirSync(path.join(TMP, "bad-skill"));
 fs.writeFileSync(path.join(TMP, "bad-skill", "SKILL.md"), "没有 frontmatter");
-assert.equal(listSkills().find((s) => s.name === "bad-skill")?.error, "缺少 frontmatter");
+assert.equal(listSkills(true).find((s) => s.name === "bad-skill")?.error, "缺少 frontmatter");
 assert.ok(listSkills().find((s) => s.name === "my-skill")?.error === undefined);
 
 // 11. 路径安全：readSkillBody/deleteSkill 拒绝非法名（不触碰 TMP 之外）
@@ -87,7 +87,6 @@ writeSkill("off-skill", "关", "x", false);
 assert.throws(() => readSkillBody("off-skill"), /禁用|已禁用/, "禁用应 throw");
 assert.equal(skillsIndexText().includes("off-skill"), false, "禁用不进索引");
 
-fs.rmSync(TMP, { recursive: true, force: true });
 console.log("verify-skill-store: IO 层 OK");
 
 // 13. load_skill：命中返回正文；重复加载去重；未知/禁用 throw 且信息含可用清单
@@ -101,6 +100,19 @@ assert.throws(() => executeLoadSkill({ name: "no-such" }, ctx), /demo-skill|可�
 executeLoadSkill({ name: "demo-skill" }, {}); // 无 ctx.loadedSkills 不去重、不崩
 console.log("verify-skill-store: load_skill OK");
 
+// 15. TTL 缓存（P2 T1）：外部改文件不刷缓存；refresh 强刷；写删自动失效
+writeSkill("cache-skill", "缓存测试", "# v1");
+listSkills(true); // 建立缓存基线
+const f = `${process.env.IFCOPE_SKILLS_DIR}/cache-skill/SKILL.md`;
+fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("# v1", "# v2-外部修改"));
+const stale = listSkills().find((s) => s.name === "cache-skill");
+assert.ok(stale?.body.includes("# v1"), "TTL 内应命中缓存（未见外部修改）");
+const fresh = listSkills(true).find((s) => s.name === "cache-skill");
+assert.ok(fresh?.body.includes("v2-外部修改"), "refresh=true 应强刷");
+writeSkill("cache-skill", "缓存测试", "# v3");
+assert.ok(listSkills().find((s) => s.name === "cache-skill")?.body.includes("# v3"), "写入应自动失效缓存");
+console.log("verify-skill-store: 缓存 OK");
+
 // 14. 数据不丢：全量正文/描述往返无损（截断只发生在模型暴露点）
 const longBody = "# 头\n" + "y".repeat(9000);
 writeSkill("long-skill", "d".repeat(400), longBody);
@@ -113,3 +125,6 @@ assert.equal(exposed, longBody.trim().slice(0, BODY_MAX) + "……（已截断�
 const idx2 = buildSkillsIndexText([round]);
 assert.ok(idx2.includes("d".repeat(DESC_MAX)) && !idx2.includes("d".repeat(DESC_MAX + 1)), "索引描述应截断");
 console.log("verify-skill-store: 暴露点截断 OK");
+
+fs.rmSync(TMP, { recursive: true, force: true });
+console.log("verify-skill-store: 全部 OK");

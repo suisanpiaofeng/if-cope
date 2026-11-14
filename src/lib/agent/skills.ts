@@ -142,8 +142,16 @@ export function ensureSeedSkills(): void {
   fs.writeFileSync(marker, "");
 }
 
-/** 全部技能（含坏文件 error 条目）；每次重扫目录（文件即真源，无缓存失效问题） */
-export function listSkills(): ParsedSkill[] {
+/** 全部技能（含坏文件 error 条目）；TTL 3s 缓存（P2 T1），refresh=true 强刷 */
+let cache: { at: number; skills: ParsedSkill[] } | null = null;
+const CACHE_TTL = 3000;
+
+export function invalidateSkillsCache(): void {
+  cache = null;
+}
+
+export function listSkills(refresh: boolean = false): ParsedSkill[] {
+  if (!refresh && cache && Date.now() - cache.at < CACHE_TTL) return cache.skills;
   ensureSeedSkills();
   const root = skillsDir();
   if (!fs.existsSync(root)) return [];
@@ -154,6 +162,7 @@ export function listSkills(): ParsedSkill[] {
     if (!fs.existsSync(file)) continue;
     out.push(parseSkillFile(fs.readFileSync(file, "utf8"), entry.name));
   }
+  cache = { at: Date.now(), skills: out };
   return out;
 }
 
@@ -187,6 +196,7 @@ export function writeSkill(
   if (extra?.params?.trim()) metaLines.push(`params: ${extra.params.trim()}`);
   const text = `---\n${metaLines.join("\n")}\n---\n${String(body ?? "").trim()}\n`;
   fs.writeFileSync(path.join(dir, "SKILL.md"), text);
+  invalidateSkillsCache();
 }
 
 /** 删技能目录；不存在返回 false（路由据此 404）；name 非法 throw */
@@ -194,6 +204,7 @@ export function deleteSkill(name: string): boolean {
   const dir = resolveSkillDir(name);
   if (!fs.existsSync(dir)) return false;
   fs.rmSync(dir, { recursive: true, force: true });
+  invalidateSkillsCache();
   return true;
 }
 

@@ -5,6 +5,7 @@
  */
 import { executeTool, type ToolCall, type ToolContext } from "./tools";
 import { withTimeout } from "./timeout";
+import { attemptWithRetry } from "./retry";
 
 /** 分类策略（规格 §3.3 表）：只读 15s 重试；web_search 30s 重试；写操作 10s 不重试；生成 120s 不重试 */
 export const TOOL_POLICY: Record<string, { timeoutMs: number; retry: boolean }> = {
@@ -32,14 +33,11 @@ export const TOOL_POLICY: Record<string, { timeoutMs: number; retry: boolean }> 
 
 const DEFAULT_POLICY = { timeoutMs: 10_000, retry: false };
 
-/** 带分类超时/重试的工具执行 */
+/** 带分类超时/重试的工具执行（重试语义走 attemptWithRetry，P2 T1） */
 export async function runTool(call: ToolCall, ctx: ToolContext): Promise<string> {
   const policy = TOOL_POLICY[call.name] ?? DEFAULT_POLICY;
-  const attempt = () => withTimeout(executeTool(call, ctx), policy.timeoutMs, `工具 ${call.name}`);
-  try {
-    return await attempt();
-  } catch (e) {
-    if (!policy.retry) throw e;
-    return await attempt(); // 只读工具：失败/超时重试一次
-  }
+  return attemptWithRetry(
+    () => withTimeout(executeTool(call, ctx), policy.timeoutMs, `工具 ${call.name}`),
+    policy.retry
+  );
 }

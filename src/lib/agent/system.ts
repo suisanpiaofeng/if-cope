@@ -3,24 +3,7 @@ import { TOOLS } from "./tools";
 import type { TodoItem } from "./todo";
 import { resolvePrompt } from "../prompts";
 import { skillsIndexText } from "./skills";
-import { workspaceRoot, listFilesTree } from "./workspace";
-import fs from "node:fs";
-import path from "node:path";
-
-/** 工作区上下文（harness P0 §3.1/§3.4）：root + 文件树摘要 + .ifcope/AGENTS.md 项目配置 */
-function buildWorkspaceSection(): string {
-  const root = workspaceRoot();
-  const tree = listFilesTree("", 2);
-  const shown = tree.slice(0, 80);
-  const lines = shown.map((n) => `${n.type === "dir" ? "[D]" : "   "} ${n.path}${n.type === "dir" ? "/" : ""}`);
-  const more = tree.length > 80 ? `\n…共 ${tree.length} 项` : "";
-  let agents = "";
-  const agentsPath = path.join(root, ".ifcope", "AGENTS.md");
-  try {
-    if (fs.existsSync(agentsPath)) agents = `\n\n【项目配置 .ifcope/AGENTS.md（学生自定义，自动加载）】\n${fs.readFileSync(agentsPath, "utf8").slice(0, 2000)}`;
-  } catch { /* 配置读取失败不阻塞对话 */ }
-  return `<workspace>\n工作区根目录：${root}\n文件树（深度 2）：\n${lines.join("\n") || "（空工作区）"}${more}${agents}\n</workspace>`;
-}
+import { buildWorkspaceSection } from "./workspace";
 
 /** 环境自知的系统提示词：告诉模型"你运行在哪、这个应用是什么、有哪些模块"，
  *  并注入实时资料库状态（类目/资料/产物 + 本次对话选中的资料）。
