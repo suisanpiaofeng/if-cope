@@ -55,6 +55,7 @@ export class McpClient {
       /* server 日志忽略（防缓冲区涨） */
     });
     proc.on("exit", () => this.cleanup(proc));
+    proc.on("error", () => this.cleanup(proc)); // spawn 失败（如命令不存在）也要释放 pending 并自愈
     this.proc = proc;
     return proc;
   }
@@ -157,4 +158,30 @@ export function getMcpClient(config: McpServerConfig): McpClient {
     pool.set(key, c);
   }
   return c;
+}
+
+// 索引缓存（30s TTL，配置签名变化即失效）
+const gi = globalThis as { __ifcopeMcpIndex?: { at: number; sig: string; text: string } };
+
+/** MCP 工具索引段（<mcp>，P2 §9.3）：注入系统提示；空配置返回 "" */
+export async function mcpIndexText(servers: McpServerConfig[]): Promise<string> {
+  const enabled = (servers ?? []).filter((s) => s.enabled);
+  if (!enabled.length) return "";
+  const sig = enabled.map((s) => `${s.name}|${s.command}|${(s.args ?? []).join(" ")}`).join(";");
+  const cache = gi.__ifcopeMcpIndex;
+  if (cache && cache.sig === sig && Date.now() - cache.at < 30_000) return cache.text;
+  const lines: string[] = [];
+  for (const s of enabled) {
+    try {
+      const tools = await getMcpClient(s).listTools();
+      for (const t of tools) lines.push(`${s.name}.${t.name} — ${(t.description ?? "").slice(0, 80)}`);
+    } catch {
+      lines.push(`${s.name}（连接失败）`);
+    }
+  }
+  const text = lines.length
+    ? `<mcp>\n外部工具（MCP 服务器）：先用 mcp_list_tools 看参数，再用 mcp_call_tool 调用（需学生确认）：\n${lines.join("\n")}\n</mcp>`
+    : "";
+  gi.__ifcopeMcpIndex = { at: Date.now(), sig, text };
+  return text;
 }

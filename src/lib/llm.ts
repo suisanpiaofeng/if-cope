@@ -10,6 +10,7 @@ import { LoopGuard } from "./agent/loopGuards";
 import { foldHistory } from "./agent/context";
 import { classifyTool, confirmModeAllows, askConfirmation, type Risk } from "./agent/confirm";
 import { classifyError, friendlyError } from "./agent/errors";
+import { mcpIndexText } from "./mcp/client";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -57,8 +58,9 @@ export async function* streamChat(
   }
 
   const context = contextBlocks.join("\n\n");
+  const mcpSection = await mcpIndexText(s.mcpServers ?? []).catch(() => ""); // MCP 工具索引（30s 缓存）
   const messages: ApiMessage[] = [
-    { role: "system", content: buildSystemPrompt(sourceIds) },
+    { role: "system", content: buildSystemPrompt(sourceIds, [], "", mcpSection) },
     ...foldHistory(history.slice(-20)).map<ApiMessage>((m) => ({ role: m.role, content: m.content })),
     {
       role: "user",
@@ -82,7 +84,7 @@ export async function* streamChat(
     const useTools = round < maxRounds;
     messages[0] = {
       role: "system",
-      content: buildSystemPrompt(sourceIds, getTodos(threadId), buildUserSection(s.userDirective ?? "", listPrefs())),
+      content: buildSystemPrompt(sourceIds, getTodos(threadId), buildUserSection(s.userDirective ?? "", listPrefs()), mcpSection),
     };
     // 手动迭代：转发增量给消费者的同时，截获工具调用与累计答案文本
     let roundText = "";

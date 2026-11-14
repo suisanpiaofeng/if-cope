@@ -29,6 +29,8 @@ export const TOOL_RISK: Record<string, Risk> = {
   edit_file: "reversible",
   create_skill: "reversible",
   install_skill: "reversible",
+  mcp_list_tools: "readonly",
+  mcp_call_tool: "reversible", // 外部工具副作用未知，保守走确认（P2 §9.3）
 };
 
 /** 命令黑名单（命中即 deny，硬拒不给确认；spec §4.3） */

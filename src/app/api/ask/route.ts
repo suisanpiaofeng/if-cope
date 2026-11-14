@@ -24,6 +24,7 @@ import { webSearch, webHitsToContext, type WebHit } from "@/lib/webSearch";
 import { cleanLabel, decideLinks, type LinkResult } from "@/lib/qaMapLink";
 import { skillsIndexText, SKILL_TOOL, executeLoadSkill } from "@/lib/agent/skills";
 import { classifyError, friendlyError } from "@/lib/agent/errors";
+import { mcpIndexText } from "@/lib/mcp/client";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -182,10 +183,11 @@ export async function POST(req: NextRequest) {
 
       const mapTools = map && map.nodes.length > 0 ? MAP_TOOLS : [];
       const skillsSection = skillsIndexText();
+      const mcpSection = await mcpIndexText(s.mcpServers ?? []).catch(() => "");
       const activeTools = [...mapTools, ...(skillsSection ? [SKILL_TOOL] : [])];
       const reqBody: Record<string, unknown> = {
         model: s.chatModel,
-        messages: [{ role: "system", content: resolvePrompt("ask_system", PROMPT_DEFAULTS.ask_system) + (skillsSection ? `\n\n${skillsSection}` : "") }, ...history, { role: "user", content: userContent }],
+        messages: [{ role: "system", content: resolvePrompt("ask_system", PROMPT_DEFAULTS.ask_system) + (skillsSection ? `\n\n${skillsSection}` : "") + (mcpSection ? `\n\n${mcpSection}` : "") }, ...history, { role: "user", content: userContent }],
         temperature: s.temperature ?? 0.3,
         ...(s.maxTokens != null ? { max_tokens: s.maxTokens } : {}),
         ...(activeTools.length ? { tools: activeTools, tool_choice: "auto" } : {}),

@@ -15,6 +15,13 @@ function publicView(s: ModelSettings) {
     translateApiKey: s.translateApiKey ? `****${s.translateApiKey.slice(-4)}` : "",
     hasTranslateKey: Boolean(s.translateApiKey),
     profiles: (s.profiles ?? []).map((p) => ({ ...p, apiKey: p.apiKey ? `****${p.apiKey.slice(-4)}` : "" })),
+    // MCP env 值可能含令牌，同遮罩语义
+    mcpServers: (s.mcpServers ?? []).map((srv) => ({
+      ...srv,
+      env: srv.env
+        ? Object.fromEntries(Object.entries(srv.env).map(([k, v]) => [k, v ? `****${v.slice(-4)}` : ""]))
+        : undefined,
+    })),
   };
 }
 
@@ -89,6 +96,30 @@ export async function PUT(req: NextRequest) {
       }),
     }),
     ...(body.activeProfile !== undefined && { activeProfile: String(body.activeProfile).slice(0, 40) }),
+    // MCP 服务器（P2 §9.3）：全量覆盖；name/command 必填
+    ...(body.mcpServers !== undefined && {
+      mcpServers: (Array.isArray(body.mcpServers) ? body.mcpServers : [])
+        .map((s) => {
+          const srv = s as { name?: string; command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean };
+          const name = String(srv.name ?? "").trim().slice(0, 40);
+          const old = current.mcpServers?.find((x) => x.name === name);
+          return {
+            name,
+            command: String(srv.command ?? "").trim(),
+            args: (Array.isArray(srv.args) ? srv.args : []).map((a) => String(a)),
+            env: srv.env && typeof srv.env === "object"
+              ? Object.fromEntries(
+                  Object.entries(srv.env).map(([k, v]) => [
+                    k,
+                    String(v).startsWith("****") ? old?.env?.[k] ?? "" : String(v),
+                  ])
+                )
+              : undefined,
+            enabled: srv.enabled !== false,
+          };
+        })
+        .filter((s) => s.name && s.command),
+    }),
     // 切档：服务端物化——从已存档取真 Key，主字段整体切换（遮罩 Key 不出服务端）
     ...(body.switchProfile !== undefined && (() => {
       const name = String(body.switchProfile).slice(0, 40);

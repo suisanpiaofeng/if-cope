@@ -26,6 +26,7 @@ type Settings = {
   workspacePath?: string;
   profiles?: { name: string; baseUrl: string; apiKey: string; chatModel: string; temperature?: number; maxTokens?: number }[];
   activeProfile?: string;
+  mcpServers?: { name: string; command: string; args: string[]; env?: Record<string, string>; enabled: boolean }[];
 };
 
 type TestResult = {
@@ -82,6 +83,35 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
   const [profiles, setProfiles] = useState<Settings["profiles"]>([]);
   const [activeProfile, setActiveProfile] = useState("");
   const [commandPolicy, setCommandPolicy] = useState<"normal" | "readonly" | "off">("normal");
+  // MCP（P2 §9.3）
+  const [mcpServers, setMcpServers] = useState<Settings["mcpServers"]>([]);
+  const [mcpTest, setMcpTest] = useState<Record<string, { ok: boolean; msg: string }>>({});
+  const [mcpDraft, setMcpDraft] = useState({ name: "", command: "", args: "" });
+
+  async function putMcp(servers: Settings["mcpServers"]) {
+    setMcpServers(servers);
+    await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mcpServers: servers }),
+    }).catch(() => null);
+  }
+
+  async function testMcp(srv: NonNullable<Settings["mcpServers"]>[number]) {
+    setMcpTest((t) => ({ ...t, [srv.name]: { ok: false, msg: "测试中…" } }));
+    const r = await fetch("/api/mcp/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ server: srv }),
+    }).catch(() => null);
+    const d = await r?.json().catch(() => null);
+    setMcpTest((t) => ({
+      ...t,
+      [srv.name]: d?.ok
+        ? { ok: true, msg: `连接成功：${d.toolCount} 个工具（${d.tools.map((x: { name: string }) => x.name).join("、") || "无"}）` }
+        : { ok: false, msg: `连接失败：${d?.error ?? "未知错误"}` },
+    }));
+  }
 
   async function saveCommandPolicy(policy: "normal" | "readonly" | "off") {
     setCommandPolicy(policy);
@@ -109,6 +139,7 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
       .then((d: Settings) => {
         setConfirmMode(d.confirmMode ?? "writes");
         setCommandPolicy(d.commandPolicy ?? "normal");
+        setMcpServers(d.mcpServers ?? []);
         setTemperature(d.temperature != null ? String(d.temperature) : "");
         setMaxTokens(d.maxTokens != null ? String(d.maxTokens) : "");
         setWorkspacePath(d.workspacePath ?? "");
@@ -563,6 +594,69 @@ export default function SettingsDrawer({ open, onClose }: { open: boolean; onClo
                   </span>
                 </label>
               ))}
+            </div>
+
+            {/* MCP 服务器（P2 §9.3） */}
+            <div className="mt-4 space-y-2">
+              <div className="text-xs font-medium text-neutral-600">MCP 外部工具服务器（stdio）</div>
+              <p className="text-[11px] text-neutral-400">接入 MCP 兼容工具服务器（命令行启动）。AI 调用外部工具需学生确认；env 值不回显完整。</p>
+              {(mcpServers ?? []).map((srv, i) => (
+                <div key={srv.name} className="rounded-lg border border-neutral-200 px-3 py-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="mono font-medium">{srv.name}</span>
+                      <span className="mono ml-2 truncate text-neutral-400">{srv.command} {(srv.args ?? []).join(" ")}</span>
+                    </div>
+                    <div className="flex shrink-0 gap-1.5">
+                      <button
+                        onClick={() => testMcp(srv)}
+                        className="rounded border border-neutral-200 px-2 py-0.5 text-neutral-600 hover:bg-neutral-50"
+                      >
+                        测试连接
+                      </button>
+                      <button
+                        onClick={() => putMcp((mcpServers ?? []).map((x, j) => (j === i ? { ...x, enabled: !x.enabled } : x)))}
+                        className={`rounded-full px-2 py-0.5 ${srv.enabled ? "bg-emerald-50 text-emerald-700" : "bg-neutral-100 text-neutral-400"}`}
+                      >
+                        {srv.enabled ? "已启用" : "已禁用"}
+                      </button>
+                      <button
+                        onClick={() => putMcp((mcpServers ?? []).filter((_, j) => j !== i))}
+                        className="rounded border border-neutral-200 px-2 py-0.5 text-neutral-600 hover:text-red-600"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                  {mcpTest[srv.name] && (
+                    <p className={`mt-1 ${mcpTest[srv.name].ok ? "text-emerald-600" : "text-red-600"}`}>{mcpTest[srv.name].msg}</p>
+                  )}
+                </div>
+              ))}
+              <div className="flex flex-wrap gap-1.5">
+                <input value={mcpDraft.name} onChange={(e) => setMcpDraft({ ...mcpDraft, name: e.target.value })} placeholder="名称"
+                  className="w-24 rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none focus:border-neutral-400" />
+                <input value={mcpDraft.command} onChange={(e) => setMcpDraft({ ...mcpDraft, command: e.target.value })} placeholder="命令（如 node）"
+                  className="w-36 rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none focus:border-neutral-400" />
+                <input value={mcpDraft.args} onChange={(e) => setMcpDraft({ ...mcpDraft, args: e.target.value })} placeholder="参数（空格分隔）"
+                  className="flex-1 rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none focus:border-neutral-400" />
+                <button
+                  onClick={() => {
+                    const name = mcpDraft.name.trim();
+                    const command = mcpDraft.command.trim();
+                    if (!name || !command) return;
+                    putMcp([...(mcpServers ?? []).filter((x) => x.name !== name), {
+                      name, command,
+                      args: mcpDraft.args.trim() ? mcpDraft.args.trim().split(/\s+/) : [],
+                      enabled: true,
+                    }]);
+                    setMcpDraft({ name: "", command: "", args: "" });
+                  }}
+                  className="rounded-lg bg-neutral-900 px-3 py-1 text-xs font-medium text-white hover:bg-neutral-700"
+                >
+                  添加
+                </button>
+              </div>
             </div>
           </section>
 

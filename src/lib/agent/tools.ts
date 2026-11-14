@@ -1,4 +1,4 @@
-import db from "@/lib/db";
+import db, { getSettings } from "@/lib/db";
 import { generateSummary } from "@/lib/artifact";
 import { webSearch, webHitsToContext } from "@/lib/webSearch";
 import { replaceTodos, type TodoItem } from "./todo";
@@ -8,6 +8,7 @@ import { planImport, injectName } from "./skillImport";
 import { workspaceRoot, resolveInWorkspace, listFilesTree } from "./workspace";
 import { executeCommand } from "./command";
 import { classifyCommand } from "./confirm";
+import { getMcpClient } from "../mcp/client";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -265,6 +266,30 @@ export const TOOLS = [
   {
     type: "function",
     function: {
+      name: "mcp_list_tools",
+      description: "列出已接入 MCP 服务器的外部工具（名称/描述）",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "mcp_call_tool",
+      description: "调用 MCP 外部工具（需学生确认）。server=服务器名，tool=工具名",
+      parameters: {
+        type: "object",
+        properties: {
+          server: { type: "string", description: "MCP 服务器名" },
+          tool: { type: "string", description: "工具名" },
+          arguments: { type: "object", description: "工具参数（对象）" },
+        },
+        required: ["server", "tool"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "create_skill",
       description: "创建/安装一个技能（SKILL.md 指令包）。学生说「帮我创建 XX 技能」时，生成完整技能正文并注册，无需学生手动操作",
       parameters: {
@@ -342,6 +367,33 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
 
     case "load_skill":
       return executeLoadSkill(call.args, ctx);
+
+    case "mcp_list_tools": {
+      const servers = (getSettings().mcpServers ?? []).filter((s) => s.enabled);
+      if (!servers.length) return "未配置已启用的 MCP 服务器（可在设置页「MCP」里添加）";
+      const out: string[] = [];
+      for (const s of servers) {
+        try {
+          const tools = await getMcpClient(s).listTools();
+          out.push(`${s.name}：${tools.map((t) => `${t.name}—${(t.description ?? "").slice(0, 60)}`).join("；") || "（无工具）"}`);
+        } catch (e) {
+          out.push(`${s.name}：连接失败（${e instanceof Error ? e.message : String(e)}）`);
+        }
+      }
+      return out.join("\n");
+    }
+
+    case "mcp_call_tool": {
+      const serverName = String(call.args.server ?? "").trim();
+      const toolName = String(call.args.tool ?? "").trim();
+      const args = (call.args.arguments ?? {}) as Record<string, unknown>;
+      const servers = (getSettings().mcpServers ?? []).filter((s) => s.enabled);
+      const srv = servers.find((s) => s.name === serverName);
+      if (!srv) {
+        throw new Error(`MCP 服务器「${serverName}」不存在或未启用。可用：${servers.map((s) => s.name).join("、") || "（无）"}`);
+      }
+      return await getMcpClient(srv).callTool(toolName, args);
+    }
 
     case "create_skill": {
       const name = String(call.args.name ?? "").trim();

@@ -252,6 +252,16 @@ export type ModelSettings = {
   /** 模型配置档（多档保存/切换；主字段始终为当前生效值） */
   profiles?: ModelProfile[];
   activeProfile?: string;
+  /** MCP 服务器（harness P2 §9.3）：stdio 命令式接入 */
+  mcpServers?: McpServerSetting[];
+};
+
+export type McpServerSetting = {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  enabled: boolean;
 };
 
 export type ModelProfile = {
