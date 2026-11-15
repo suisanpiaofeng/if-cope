@@ -70,20 +70,20 @@ function buildArtifactBlocks(ids: number[]): string[] {
 }
 
 export async function POST(req: NextRequest) {
-  const { threadId, sourceIds, question, artifactIds } = (await req.json()) as {
-    threadId?: number; sourceIds: number[]; question: string; artifactIds?: number[];
+  const { threadId, sourceIds, question, artifactIds, projectId } = (await req.json()) as {
+    threadId?: number; sourceIds: number[]; question: string; artifactIds?: number[]; projectId?: number | null;
   };
   if (!question?.trim()) return NextResponse.json({ error: "请输入问题" }, { status: 400 });
   if (!sourceIds?.length && !artifactIds?.length) {
     return NextResponse.json({ error: "请先勾选要问答的资源或产物" }, { status: 400 });
   }
 
-  // 线程：没有就建，标题取首问
+  // 线程：没有就建，标题取首问；归属创建时项目（不可改，P4 定稿 §〇）
   let tid = threadId;
   if (!tid) {
     const info = db
-      .prepare("INSERT INTO threads (title, source_ids, created_at) VALUES (?, ?, ?)")
-      .run(question.trim().slice(0, 40), JSON.stringify(sourceIds), Date.now());
+      .prepare("INSERT INTO threads (title, source_ids, project_id, created_at) VALUES (?, ?, ?, ?)")
+      .run(question.trim().slice(0, 40), JSON.stringify(sourceIds), projectId ?? null, Date.now());
     tid = Number(info.lastInsertRowid);
   } else {
     db.prepare("UPDATE threads SET source_ids = ? WHERE id = ?").run(JSON.stringify(sourceIds), tid);

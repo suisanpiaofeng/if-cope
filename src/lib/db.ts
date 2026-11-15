@@ -30,6 +30,15 @@ CREATE TABLE IF NOT EXISTS sources (
   path TEXT,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  description TEXT,
+  dir TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS chunks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_id INTEGER NOT NULL,
@@ -230,6 +239,12 @@ if (!srcCols.some((c) => c.name === "path")) {
 const artCols = db.prepare("PRAGMA table_info(artifacts)").all() as { name: string }[];
 if (!artCols.some((c) => c.name === "path")) {
   db.exec("ALTER TABLE artifacts ADD COLUMN path TEXT");
+}
+for (const [table, col] of [["sources", "project_id"], ["artifacts", "project_id"], ["threads", "project_id"]] as const) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === col)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} INTEGER`);
+  }
 }
 
 export type ModelSettings = {
