@@ -11,7 +11,7 @@ import { lineDiff, formatDiff } from "@/lib/agent/diff";
 import ErrorBanner from "./ErrorBanner";
 import type { TodoItem } from "@/lib/agent/todo";
 
-type Thread = { id: number; title: string; created_at: number; message_count?: number };
+type Thread = { id: number; title: string; created_at: number; message_count?: number; project_title?: string | null };
 type Message = { id?: number; role: "user" | "assistant"; content: string; reasoning?: string; citations?: Citation[]; live?: boolean };
 type Citation = { n: number; sourceId: number; title: string; page: number | null; quote: string };
 type PanelView = "home" | "chat" | "all";
@@ -65,7 +65,7 @@ function mapMsgs(data: { messages?: { id?: number; role: string; content: string
 
 /** 最右对话栏：主界面（最近 3 条）↔ 对话视图 ↔ 全部对话；回答进行中回退不中断 */
 export default function ChatPanel({
-  sources, artifacts, selected, selectedArts, onSelectionReset, onToggleSource, onToggleArtifact, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve, onOpenSourceById,
+  sources, artifacts, selected, selectedArts, onSelectionReset, onToggleSource, onToggleArtifact, onGenerateNote, generatingNote, onOrganize, organizing, organizeMsg, onOpenSolve, onOpenSourceById, projectId,
 }: {
   sources: Source[];
   /** 产物（知识地图/笔记等）：勾选/拖入同样作为问答依据 */
@@ -93,6 +93,8 @@ export default function ChatPanel({
   onOpenSolve?: () => void;
   /** 引用溯源（P3-3 §4.4）：打开源文件并高亮定位 */
   onOpenSourceById?: (id: number, quote?: string) => void;
+  /** 当前项目（P4-4 锚定）：新会话归属该项目；无手选时检索范围默认项目内 */
+  projectId?: number;
 }) {
   const ready = sources.filter((s) => s.status === "ready");
   // 拖入对话框的视觉反馈（拖入 = 同步勾选，左侧资源栏同步显示；无独立的 dropped 集合）
@@ -213,7 +215,7 @@ export default function ChatPanel({
   async function ask() {
     const question = input.trim();
     if (!question || streaming) return;
-    if (context.length === 0 && selectedArts.size === 0) { setError(hasFilter ? "所选文件中还没有可检索的资源" : "还没有可检索的资源，先上传并解析成功"); return; }
+    if (context.length === 0 && selectedArts.size === 0 && !projectId) { setError(hasFilter ? "所选文件中还没有可检索的资源" : "还没有可检索的资源，先上传并解析成功"); return; }
     setError(null);
     setInput("");
     setView("chat");
@@ -227,7 +229,7 @@ export default function ChatPanel({
     try {
       const res = await fetch("/api/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId, sourceIds: context.map((s) => s.id), artifactIds: [...selectedArts], question }),
+        body: JSON.stringify({ threadId, sourceIds: context.map((s) => s.id), artifactIds: [...selectedArts], question, projectId: projectId ?? undefined }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error ?? "请求失败"); }
       const reader = res.body!.getReader();
@@ -462,6 +464,9 @@ export default function ChatPanel({
                         <div className="flex items-center gap-2">
                           {isRunning(t.id) && <span className="breathe h-2 w-2 shrink-0 rounded-full bg-emerald-500" />}
                           <ThreadTitle id={t.id} title={t.title} onRenamed={loadThreads} />
+                          {t.project_title && (
+                            <span className="shrink-0 rounded bg-neutral-100 px-1 text-[9px] text-neutral-500">{t.project_title}</span>
+                          )}
                         </div>
                         <div className="mt-1 flex items-center justify-between">
                           <span className={`text-[11px] ${isRunning(t.id) ? "text-emerald-600" : "text-neutral-400"}`}>
@@ -619,6 +624,9 @@ export default function ChatPanel({
                   <div className="flex items-center gap-2">
                     {isRunning(t.id) && <span className="breathe h-2 w-2 shrink-0 rounded-full bg-emerald-500" />}
                     <ThreadTitle id={t.id} title={t.title} onRenamed={loadThreads} className="pr-6 text-neutral-700" />
+                    {t.project_title && (
+                      <span className="shrink-0 rounded bg-neutral-100 px-1 text-[9px] text-neutral-500">{t.project_title}</span>
+                    )}
                   </div>
                   <div className="mt-0.5 text-[10px] text-neutral-400">
                     {isRunning(t.id) ? <span className="text-emerald-600">正在回答…</span> : timeAgo(t.created_at)}

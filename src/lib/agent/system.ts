@@ -9,9 +9,10 @@ import { buildWorkspaceSection } from "./workspace";
  *  并注入实时资料库状态（类目/资料/产物 + 本次对话选中的资料）。
  *  参考 TRAE/Cursor 类 AI IDE 的做法：System Context 注入 + Function Calling。 */
 
-export function buildSystemPrompt(selectedSourceIds: number[], todos: TodoItem[] = [], userSection: string = "", mcpSection: string = ""): string {
+export function buildSystemPrompt(selectedSourceIds: number[], todos: TodoItem[] = [], userSection: string = "", mcpSection: string = "", projectTitle: string = ""): string {
   const skillsText = skillsIndexText();
   const workspaceText = buildWorkspaceSection();
+  const projectLine = projectTitle ? `\n当前项目：${projectTitle}——回答、检索与文件操作以该项目为中心。` : "";
   return `你是 IF.Cope 的内置 AI 助手，运行在一个校园 AI 学习工作站应用里。你不仅能答疑，还能通过工具直接操作这个应用。
 
 ## 应用结构（IF.Cope）
@@ -73,7 +74,7 @@ ${todos.length ? todos.map((t) => `- [${t.status}] ${t.id}. ${t.text}`).join("\n
 ## 当前资料库实时状态
 ${buildLibraryState(selectedSourceIds)}
 
-${workspaceText}${mcpSection ? `\n\n${mcpSection}` : ""}${resolvePrompt("chat_append", "") ? `\n\n<user_instructions>\n${resolvePrompt("chat_append", "")}\n</user_instructions>` : ""}`;
+${workspaceText}${projectLine}${mcpSection ? `\n\n${mcpSection}` : ""}${resolvePrompt("chat_append", "") ? `\n\n<user_instructions>\n${resolvePrompt("chat_append", "")}\n</user_instructions>` : ""}`;
 }
 
 function listToolsText(): string {

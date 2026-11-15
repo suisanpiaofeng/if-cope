@@ -11,7 +11,7 @@ import type { Source } from "@/lib/types";
 import { useLibrary } from "@/lib/useLibrary";
 import { filePreviewKind } from "@/lib/preview";
 
-export default function WorkspaceView() {
+export default function WorkspaceView({ projectId }: { projectId?: number } = {}) {
   const [tabs, setTabs] = useState<PreviewTab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [generatingNote, setGeneratingNote] = useState<string | null>(null);
@@ -274,6 +274,7 @@ export default function WorkspaceView() {
 
       <div className="shrink-0" style={{ width: chatW }}>
         <ChatPanel
+          projectId={projectId}
           sources={sources}
           artifacts={artifacts}
           selected={selected}

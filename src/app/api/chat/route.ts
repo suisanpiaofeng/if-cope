@@ -12,8 +12,9 @@ export async function GET(req: NextRequest) {
   if (!threadId) {
     const threads = db
       .prepare(
-        `SELECT t.*, (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS message_count
-         FROM threads t ORDER BY t.created_at DESC`
+        `SELECT t.*, p.title AS project_title, (SELECT COUNT(*) FROM messages m WHERE m.thread_id = t.id) AS message_count
+         FROM threads t LEFT JOIN projects p ON p.id = t.project_id
+         ORDER BY t.created_at DESC`
       )
       .all();
     return NextResponse.json({ threads });
@@ -74,9 +75,20 @@ export async function POST(req: NextRequest) {
     threadId?: number; sourceIds: number[]; question: string; artifactIds?: number[]; projectId?: number | null;
   };
   if (!question?.trim()) return NextResponse.json({ error: "请输入问题" }, { status: 400 });
-  if (!sourceIds?.length && !artifactIds?.length) {
+  if (!sourceIds?.length && !artifactIds?.length && !projectId) {
     return NextResponse.json({ error: "请先勾选要问答的资源或产物" }, { status: 400 });
   }
+
+  // 项目锚定（P4-4）：无手选依据时默认检索当前项目内已入库资料
+  let scopedIds = sourceIds;
+  if (!scopedIds.length && projectId) {
+    scopedIds = (
+      db.prepare("SELECT id FROM sources WHERE project_id = ? AND status = 'ready'").all(projectId) as Array<{ id: number }>
+    ).map((r) => r.id);
+  }
+  const projectTitle = projectId
+    ? (db.prepare("SELECT title FROM projects WHERE id = ?").get(projectId) as { title: string } | undefined)?.title
+    : undefined;
 
   // 线程：没有就建，标题取首问；归属创建时项目（不可改，P4 定稿 §〇）
   let tid = threadId;
@@ -98,7 +110,7 @@ export async function POST(req: NextRequest) {
   db.prepare("INSERT INTO messages (thread_id, role, content, created_at) VALUES (?, 'user', ?, ?)")
     .run(tid, question.trim(), Date.now());
 
-  const hits = await retrieve(question, sourceIds);
+  const hits = await retrieve(question, scopedIds);
   const contextBlocks = buildContextBlocks(hits);
   // ── 产物上下文（勾选的知识地图/笔记等）：产物不分块，整篇注入（截断） ──
   const artifactBlocks = buildArtifactBlocks(artifactIds ?? []);
@@ -121,7 +133,7 @@ export async function POST(req: NextRequest) {
         let full = "";
         let reasoningFull = "";
         const finalBlocks = [...contextBlocks, ...artifactBlocks, ...(webHits.length ? [webHitsToContext(webHits)] : [])];
-        for await (const part of streamChat(question.trim(), finalBlocks, history, sourceIds, tid)) {
+        for await (const part of streamChat(question.trim(), finalBlocks, history, scopedIds, tid, projectTitle)) {
           if (part.reasoning) {
             reasoningFull += part.reasoning;
             send({ reasoning: part.reasoning });
