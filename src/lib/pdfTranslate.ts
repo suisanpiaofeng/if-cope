@@ -13,7 +13,7 @@ import path from "path";
 import os from "os";
 import { execFile } from "child_process";
 import db from "./db";
-import { sourcePath } from "./fileTree";
+import { sourcePath, writeTreeFile } from "./fileTree";
 import { translateUpstream } from "./translate";
 import { saveFile, sha256 } from "./storage";
 import { ingestSource } from "./ingest";
@@ -43,8 +43,8 @@ export function resolveTranslatedPath(rel: string): string | null {
 export function runPdf2zh(sourceId: number): Promise<{ translatedSourceId: number; doc: PdfTranslationDoc }> {
   return new Promise((resolve, reject) => {
     const src = db
-      .prepare("SELECT id, title, filename FROM sources WHERE id = ?")
-      .get(sourceId) as { id: number; title: string; filename: string | null } | undefined;
+      .prepare("SELECT id, title, filename, path, project_id FROM sources WHERE id = ?")
+      .get(sourceId) as { id: number; title: string; filename: string | null; path: string | null; project_id: number | null } | undefined;
     if (!src) return reject(new Error(`资源 #${sourceId} 不存在`));
     const storage = src.filename ?? "";
     if (!storage.toLowerCase().endsWith(".pdf")) return reject(new Error("该资源不是 PDF 文件"));
@@ -97,7 +97,10 @@ export function runPdf2zh(sourceId: number): Promise<{ translatedSourceId: numbe
             if (dup) {
               translatedSourceId = dup.id; // 同译文已入库（重译同一文件）：复用，不重复占存储
             } else {
-              const storageName = saveFile(buffer, "pdf");
+              // 译文归位（P4 定稿 §3.5）：落原文同项目同目录（不再入散列存储）
+              const origRel = String(src.path ?? "");
+              const dirRel = origRel.includes("/") ? origRel.slice(0, origRel.lastIndexOf("/")) : "资料";
+              const treePath = writeTreeFile(buffer, `《${src.title.slice(0, 40)}》译文`, "pdf", dirRel);
               const cat = (
                 db.prepare("SELECT category_id FROM sources WHERE id = ?").get(sourceId) as
                   | { category_id: number | null }
@@ -105,10 +108,10 @@ export function runPdf2zh(sourceId: number): Promise<{ translatedSourceId: numbe
               )?.category_id;
               const info = db
                 .prepare(
-                  `INSERT INTO sources (title, filename, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at, origin_id)
-                   VALUES (?, ?, 'pdf', 'application/pdf', ?, ?, 'file', NULL, '翻译', ?, 'processing', ?, ?)`
+                  `INSERT INTO sources (title, filename, path, project_id, ext, mime, size, sha256, source_type, url, type, category_id, status, created_at, origin_id)
+                   VALUES (?, ?, ?, ?, 'pdf', 'application/pdf', ?, ?, 'file', NULL, '翻译', ?, 'processing', ?, ?)`
                 )
-                .run(`《${src.title.slice(0, 40)}》译文`, storageName, buffer.length, hash, cat, Date.now(), sourceId);
+                .run(`《${src.title.slice(0, 40)}》译文`, treePath.split("/").pop()!, treePath, src.project_id ?? null, buffer.length, hash, cat, Date.now(), sourceId);
               translatedSourceId = Number(info.lastInsertRowid);
               await ingestSource(translatedSourceId); // 同步解析+嵌入（译文可被对话检索）
             }

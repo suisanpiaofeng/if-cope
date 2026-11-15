@@ -50,6 +50,8 @@ type MapTab = {
   nodes: QaMapNode[];
   edges: QaMapEdge[];
   selectedId: string | null;
+  /** 检索范围：多选项目 id（空=全部）；地图全局无归属（P4 定稿 §〇） */
+  projectScope?: number[];
 };
 
 let tabSeq = 1;
@@ -60,6 +62,7 @@ const newTab = (): MapTab => ({
   nodes: [],
   edges: [],
   selectedId: null,
+  projectScope: [],
 });
 
 export default function SolvePage() {
@@ -70,6 +73,21 @@ export default function SolvePage() {
   const [image, setImage] = useState<{ dataUrl: string; name: string } | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // 检索范围多选（P4 定稿）：地图全局无归属，多选项目仅圈定答题检索
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [projects, setProjects] = useState<Array<{ id: number; title: string }>>([]);
+  useEffect(() => {
+    fetch("/api/projects")
+      .then((r) => r.json())
+      .then((d: { projects?: Array<{ id: number; title: string }> }) => setProjects(d.projects ?? []))
+      .catch(() => setProjects([]));
+  }, []);
+
+  function toggleScope(id: number) {
+    if (!active) return;
+    const cur = active.projectScope ?? [];
+    patchActive({ projectScope: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
+  }
   const [saveState, setSaveState] = useState("已保存");
   // 共享资源库：视图过滤 = 仅 ready；勾选集即问答依据（可拖入下方对话框）
   const lib = useLibrary({ sourceFilter: (s) => s.status === "ready" });
@@ -182,7 +200,7 @@ export default function SolvePage() {
           const t = next.find((x) => x.key === key);
           if (t && t.mapId != null) {
             setSaveState("保存中…");
-            const data: QaMapData = { title: t.title, nodes: t.nodes, edges: t.edges ?? [] };
+            const data: QaMapData = { title: t.title, nodes: t.nodes, edges: t.edges ?? [], projectScope: t.projectScope ?? [] };
             fetch(`/api/artifacts/${t.mapId}`, {
               method: "PUT",
               headers: { "Content-Type": "application/json" },
@@ -201,6 +219,11 @@ export default function SolvePage() {
   // ── 提问 / 追问 ──
   async function ask(question: string, explicitParentId?: string) {
     if (!active || busyKey) return;
+    // 检索范围（P4 定稿）：多选项目圈定；手选依据优先
+    const scope = active.projectScope ?? [];
+    const scopeIds = scope.length
+      ? sources.filter((s) => s.project_id != null && scope.includes(s.project_id)).map((s) => s.id)
+      : [];
     setBusyKey(active.key);
     setError("");
     setNotice("");
@@ -212,7 +235,7 @@ export default function SolvePage() {
           question,
           mapId: active.mapId,
           ...(explicitParentId ? { parentId: explicitParentId } : {}),
-          ...(contextIds.size ? { sourceIds: [...contextIds] } : {}),
+          ...(contextIds.size ? { sourceIds: [...contextIds] } : scopeIds.length ? { sourceIds: scopeIds } : {}),
           image: image?.dataUrl ?? null,
         }),
       });
@@ -611,6 +634,7 @@ export default function SolvePage() {
             nodes: map.nodes ?? [],
             edges: map.edges ?? [],
             selectedId: null,
+            projectScope: map.projectScope ?? [],
           };
           setTabs((prev) => {
             // 双保险：拉取期间若已被别的路径添加（如新追问自动建卡），不再重复
@@ -678,7 +702,7 @@ export default function SolvePage() {
 
   function download(kind: "md" | "json") {
     if (!active) return;
-    const data: QaMapData = { title: active.title, nodes: active.nodes, edges: active.edges ?? [] };
+    const data: QaMapData = { title: active.title, nodes: active.nodes, edges: active.edges ?? [], projectScope: active.projectScope ?? [] };
     const body = kind === "md" ? qaMapToMarkdown(data) : JSON.stringify(data, null, 2);
     const blob = new Blob([body], {
       type: kind === "md" ? "text/markdown;charset=utf-8" : "application/json;charset=utf-8",
@@ -901,6 +925,32 @@ export default function SolvePage() {
             placeholder="地图标题"
           />
           <span className="num shrink-0 text-[10px] text-neutral-400">{saveState}</span>
+          {/* 检索范围：多选项目（不选=全部） */}
+          <span className="relative shrink-0">
+            <button
+              onClick={() => setScopeOpen((o) => !o)}
+              title="限定答题检索的项目范围"
+              className="border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
+            >
+              检索范围：{(active?.projectScope ?? []).length ? `${active!.projectScope!.length} 个项目` : "全部"} ▾
+            </button>
+            {scopeOpen && (
+              <div className="absolute right-0 top-8 z-20 w-60 rounded-lg border border-neutral-200 bg-white p-2 shadow-lg">
+                <p className="px-1 pb-1 text-[10px] text-neutral-400">勾选项目限定答题检索范围（不选=全部项目）</p>
+                {projects.map((p) => (
+                  <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-neutral-50">
+                    <input
+                      type="checkbox"
+                      checked={(active?.projectScope ?? []).includes(p.id)}
+                      onChange={() => toggleScope(p.id)}
+                    />
+                    {p.title}
+                  </label>
+                ))}
+                {projects.length === 0 && <p className="px-1 py-1 text-[10px] text-neutral-300">暂无项目</p>}
+              </div>
+            )}
+          </span>
           <div className="flex shrink-0 items-center gap-1">
             <button
               onClick={undo}

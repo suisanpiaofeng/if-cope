@@ -45,6 +45,8 @@ export type QaMapData = {
   title: string;
   nodes: QaMapNode[];
   edges: QaMapEdge[];
+  /** 检索范围（P4 定稿 §〇）：多选项目 id；空=不限；地图全局无归属 */
+  projectScope?: number[];
 };
 
 /** 边 id：同向稳定唯一 */
@@ -206,7 +208,12 @@ export function normalizeQaMap(raw: unknown): QaMapData | null {
     }
   }
 
-  return { title: String(obj.title ?? "").trim().slice(0, 60) || "导入的知识地图", nodes, edges };
+  return {
+    title: String(obj.title ?? "").trim().slice(0, 60) || "导入的知识地图",
+    nodes,
+    edges,
+    projectScope: Array.isArray(obj.projectScope) ? obj.projectScope.map(Number).filter((n) => Number.isInteger(n)) : undefined,
+  };
 }
 
 /** 整张地图 → markdown（导出用）：每节点取第一条入边为树边做缩进，其余入边以「关联至」附注 */

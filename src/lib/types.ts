@@ -12,6 +12,10 @@ export type Source = {
   /** 译文专用：原文资源 id（type=翻译 时指向被翻译的那份；供历史打开原译对照） */
   origin_id?: number | null;
   category_id: number | null;
+  /** 所属项目（P4）；NULL=未分配（根平铺历史文件） */
+  project_id?: number | null;
+  /** 树内相对路径（统一文件树后新增） */
+  path?: string | null;
   status: string;        // processing | ready | failed
   note: string | null;
   page_count: number;
