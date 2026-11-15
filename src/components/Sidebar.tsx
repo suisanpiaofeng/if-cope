@@ -2,13 +2,23 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import SettingsDrawer from "./SettingsDrawer";
+import { listRecent, removeRecent, subscribeRecent, projectTileClasses, projectInitial, type RecentProject } from "@/lib/recentProjects";
 
 /** 最左功能竖栏：可收起为窄图标栏（参考 OpenFic） */
 export default function Sidebar({ configured }: { configured: boolean | null }) {
   const [collapsed, setCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [recents, setRecents] = useState<RecentProject[]>([]);
+  const pathname = usePathname();
+
+  // 最近项目槽位（OpenFic 对齐）：进入项目自动入槽；× 只移出槽位
+  useEffect(() => {
+    const sync = () => setRecents(listRecent());
+    sync();
+    return subscribeRecent(sync);
+  }, [pathname]);
 
   return (
     <aside
@@ -25,13 +35,46 @@ export default function Sidebar({ configured }: { configured: boolean | null }) 
       </div>
 
       <nav className={`flex-1 space-y-1 ${collapsed ? "px-2" : "px-2.5"}`}>
-        <NavItem collapsed={collapsed} icon="grid" label="工作台" href="/" />
-        <NavItem collapsed={collapsed} icon="translate" label="文献翻译" href="/translate" />
+        <NavItem collapsed={collapsed} icon="grid" label="项目" href="/projects" />
         <NavItem collapsed={collapsed} icon="solve" label="解题答疑" href="/solve" />
+        <NavItem collapsed={collapsed} icon="translate" label="文献翻译" href="/translate" />
         <NavItem collapsed={collapsed} icon="tools" label="工具库" href="/tools" />
         <NavItem collapsed={collapsed} icon="classroom" label="课堂" href="/classroom" />
-        <SettingsItem collapsed={collapsed} onClick={() => setSettingsOpen(true)} />
       </nav>
+
+      {/* 最近项目槽位：×=移出槽位（不删项目）；点击进项目视图 */}
+      {recents.length > 0 && (
+        <div className={`space-y-1 border-t border-neutral-100 py-2 ${collapsed ? "px-2" : "px-2.5"}`}>
+          {!collapsed && <p className="px-1 pb-1 text-[10px] uppercase tracking-wider text-neutral-300">最近项目</p>}
+          {recents.map((p) => (
+            <div key={p.id} className="group flex items-center gap-1.5">
+              <Link
+                href={`/projects/${p.id}`}
+                title={p.title}
+                className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-neutral-100 ${
+                  pathname === `/projects/${p.id}` ? "bg-neutral-100" : ""
+                }`}
+              >
+                <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${projectTileClasses(p.id)}`}>
+                  {projectInitial(p.title)}
+                </span>
+                {!collapsed && <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-700">{p.title}</span>}
+              </Link>
+              {!collapsed && (
+                <button
+                  onClick={() => removeRecent(p.id)}
+                  title="移出槽位（不删项目）"
+                  className="hidden shrink-0 text-[11px] text-neutral-300 hover:text-neutral-600 group-hover:block"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <SettingsItem collapsed={collapsed} onClick={() => setSettingsOpen(true)} />
 
       <div className={`border-t border-neutral-100 py-3 ${collapsed ? "flex justify-center" : "px-3.5"}`}>
         {configured !== null && (
