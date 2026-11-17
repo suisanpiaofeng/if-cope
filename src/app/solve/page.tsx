@@ -21,12 +21,12 @@ import "@xyflow/react/dist/style.css";
 import Sidebar from "@/components/Sidebar";
 import FilesPanel from "@/components/FilesPanel";
 import ChatPanel from "@/components/ChatPanel";
+import PreviewPanel, { type PreviewTab, type SaveFileResult } from "@/components/PreviewPanel";
 import QAMapCard, { type QaMapRFNode } from "@/components/qa-map/QAMapCard";
 import EdgesOverlay from "@/components/qa-map/EdgesOverlay";
 import EdgeDialog from "@/components/qa-map/EdgeDialog";
 import RepairDialog, { type RepairSuggestion } from "@/components/qa-map/RepairDialog";
 import AnalyzeDialog from "@/components/qa-map/AnalyzeDialog";
-import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
 import {
   autoLayout,
   edgeId,
@@ -40,6 +40,7 @@ import {
 } from "@/lib/qaMapTypes";
 import type { Source } from "@/lib/types";
 import { useLibrary } from "@/lib/useLibrary";
+import { filePreviewKind } from "@/lib/preview";
 
 const nodeTypes = { qaCard: QAMapCard };
 
@@ -92,7 +93,9 @@ export default function SolvePage() {
   // 共享资源库：视图过滤 = 仅 ready；勾选集即问答依据（可拖入下方对话框）
   const lib = useLibrary({ sourceFilter: (s) => s.status === "ready" });
   const { sources, categories, selected: contextIds } = lib;
-  const [previewSource, setPreviewSource] = useState<Source | null>(null);
+  // 中栏预览多标签（与其它模块一致，P4 补丁：替换右侧小抽屉）
+  const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
+  const [previewActiveKey, setPreviewActiveKey] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<{
     edgeId: string;
     end: "from" | "to";
@@ -328,9 +331,41 @@ export default function SolvePage() {
     void askRef.current(question, parentId);
   }, []);
 
+  /** 打开源预览到中栏多标签（与其它模块一致的 PreviewPanel；P4 补丁替换右侧小抽屉） */
+  function openSourcePreview(s: Source, quote?: string) {
+    const key = `src-${s.id}-${Date.now()}`;
+    if (s.source_type === "link") {
+      setPreviewTabs((t) => [...t, { key, kind: "file", fileType: "site", ext: "url", id: s.id, title: s.title, loading: true }]);
+      setPreviewActiveKey(key);
+      fetch(`/api/preview/${s.id}`)
+        .then((r) => (r.ok ? r.json() : r.json().then((d) => Promise.reject(new Error(d.error ?? `HTTP ${r.status}`)))))
+        .then((d) => setPreviewTabs((t) => t.map((x) => (x.key === key ? { ...x, loading: false, text: d.text, error: d.warning ? `⚠ ${d.warning}` : undefined } : x))))
+        .catch((err) => setPreviewTabs((t) => t.map((x) => (x.key === key ? { ...x, loading: false, error: `爬取失败：${err instanceof Error ? err.message : String(err)}` } : x))));
+      return;
+    }
+    const kind = s.source_type === "file" ? filePreviewKind(s.ext) : null;
+    if (kind) {
+      const streaming = kind === "image" || kind === "pdf" || kind === "sheet";
+      setPreviewTabs((t) => [...t, { key, kind: "file", fileType: kind, ext: s.ext, id: s.id, title: s.title, loading: !streaming, highlight: quote }]);
+      setPreviewActiveKey(key);
+      if (!streaming) {
+        fetch(`/api/preview/${s.id}`)
+          .then((r) => (r.ok ? r.json() : r.json().then((d) => Promise.reject(new Error(d.error ?? `HTTP ${r.status}`)))))
+          .then((d) => setPreviewTabs((t) => t.map((x) => (x.key === key ? { ...x, loading: false, text: d.text, html: d.html } : x))))
+          .catch((err) => setPreviewTabs((t) => t.map((x) => (x.key === key ? { ...x, loading: false, error: `读取失败：${err instanceof Error ? err.message : String(err)}` } : x))));
+      }
+      return;
+    }
+    setPreviewTabs((t) => [...t, { key, kind: "source", id: s.id, title: s.title, loading: true, highlight: quote }]);
+    setPreviewActiveKey(key);
+    fetch(`/api/lookup?sourceId=${s.id}`)
+      .then((r) => r.json())
+      .then((d) => setPreviewTabs((t) => t.map((x) => (x.key === key ? { ...x, loading: false, chunks: d.chunks } : x))));
+  }
+
   const onCite = useCallback((sourceId: number) => {
     const s = sourcesRef.current.find((x) => x.id === sourceId);
-    if (s) setPreviewSource(s);
+    if (s) openSourcePreview(s);
   }, []);
 
   const onResize = useCallback((id: string, w: number, h: number) => {
@@ -827,7 +862,7 @@ export default function SolvePage() {
             onNewCategory={lib.newCategory}
             onMoveSource={lib.moveSource}
             onMoveArtifact={async () => {}}
-            onOpenSource={(s) => setPreviewSource(s)}
+            onOpenSource={(s) => openSourcePreview(s)}
             sectionTitle={contextIds.size > 0 ? `资源 · 依据 ${contextIds.size}` : "资源"}
             emptyText="暂无资料（可先去工作台上传）"
             topBarExtra={
@@ -960,13 +995,41 @@ export default function SolvePage() {
           <button onClick={() => download("json")} className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs hover:bg-neutral-50">
             导出 JSON
           </button>
-          <Link href="/" className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-50">
-            工作台
+          <Link href="/projects" className="shrink-0 border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:bg-neutral-50">
+            项目
           </Link>
         </div>
 
-        {/* 画布 + 右侧预览 */}
+        {/* 中栏预览（多标签，与其它模块一致；点资源在此打开）＋ 画布 */}
         <div className="flex min-h-0 flex-1">
+          {previewTabs.length > 0 && (
+            <div className="flex min-w-0 flex-1 flex-col border-r border-neutral-200">
+              <PreviewPanel
+                tabs={previewTabs}
+                activeKey={previewActiveKey}
+                onSelect={setPreviewActiveKey}
+                onClose={(k) =>
+                  setPreviewTabs((t) => {
+                    const next = t.filter((x) => x.key !== k);
+                    setPreviewActiveKey((a) => (a === k ? (next[next.length - 1]?.key ?? null) : a));
+                    return next;
+                  })
+                }
+                onSaveFile={async (sid, text) => {
+                  const res = await fetch(`/api/sources/${sid}`, {
+                    method: "PUT", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text }),
+                  });
+                  const d = (await res.json()) as { ok?: boolean; error?: string; status?: string; chunk_count?: number };
+                  if (d.ok) {
+                    setPreviewTabs((t) => t.map((x) => (x.kind === "file" && x.id === sid ? { ...x, text } : x)));
+                    void lib.load();
+                  }
+                  return { ok: Boolean(d.ok), error: d.error, status: d.status, chunk_count: d.chunk_count };
+                }}
+              />
+            </div>
+          )}
           <div ref={canvasRef} className="relative min-w-0 flex-1">
             {(active?.nodes.length ?? 0) === 0 ? (
               <div className="flex h-full items-center justify-center">
@@ -1087,8 +1150,7 @@ export default function SolvePage() {
             {/* 底部悬浮问答框已删（2026-11-15 用户反馈）：地图问答迁入右栏「解题对话」，避免与工作对话混淆 */}
           </div>
 
-          {/* 右侧预览抽屉 */}
-          <SourcePreviewDrawer source={previewSource} onClose={() => setPreviewSource(null)} />
+          {/* 右侧预览抽屉已删（P4 补丁：预览升级中栏多标签） */}
 
         </div>
       </main>

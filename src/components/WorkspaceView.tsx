@@ -4,6 +4,7 @@
  *  项目视图（/projects/:id）与后续模块复用；无外壳依赖（高度由父级给）。 */
 import { useEffect, useState } from "react";
 import type { Artifact } from "./FilesPanel";
+import FilesPanel from "./FilesPanel";
 import PreviewPanel, { type PreviewTab, type SaveFileResult } from "@/components/PreviewPanel";
 import ChatPanel from "@/components/ChatPanel";
 import FileTree from "@/components/FileTree";
@@ -252,16 +253,28 @@ export default function WorkspaceView({ projectId, projectDir }: { projectId?: n
     <div className="flex min-h-0 flex-1 overflow-hidden bg-white">
 
       <div className="flex shrink-0 flex-col" style={{ width: filesW }}>
-        <FileTree
-          selected={selected}
-          onToggleSelect={lib.toggleSelect}
-          onOpenSource={openSourceById}
-          onOpenFile={openWsFile}
+        <FilesPanel
+          sources={sources}
+          artifacts={artifacts}
           categories={categories}
+          genError={genError}
+          selected={selected}
+          selectedArts={selectedArts}
+          onToggleSource={lib.toggleSelect}
+          onToggleArtifact={lib.toggleSelectArtifact}
+          onToggleFolder={lib.toggleFolderSelect}
+          onToggleAll={lib.toggleSelectAll}
           onUpload={lib.upload}
           onAddLink={lib.addLink}
           onAddText={lib.addText}
-          rootPath={projectDir || ""}
+          onDeleteSource={lib.removeSource}
+          onDeleteArtifact={async () => {}}
+          onDeleteCategory={lib.removeCategory}
+          onNewCategory={lib.newCategory}
+          onMoveSource={lib.moveSource}
+          onMoveArtifact={async () => {}}
+          onOpenSource={(s) => openSourceById(s.id, undefined)}
+          onOpenArtifact={openArtifact}
         />
       </div>
 
