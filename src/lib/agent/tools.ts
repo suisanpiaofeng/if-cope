@@ -264,6 +264,24 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "pdf_tool",
+      description: "对工作区内的 PDF 执行工具操作（旋转/删页/合并/拆分/压缩/OCR/加解密等，Stirling 引擎）。输出另存或覆盖原文件",
+      parameters: {
+        type: "object",
+        properties: {
+          endpoint: { type: "string", description: "工具端点（如 general/rotate-pdf、general/remove-pages、misc/compress-pdf、general/merge-pdfs）" },
+          pdf_path: { type: "string", description: "目标 PDF（工作区内相对路径）" },
+          pdf_paths: { type: "array", items: { type: "string" }, description: "多个 PDF（合并/拆分等多文件工具用）" },
+          fields: { type: "object", description: "工具参数（如 {\"angle\":\"90\"}、{\"pageNumbers\":\"1,3-5\"}）" },
+          output_path: { type: "string", description: "输出另存路径（可选；缺省覆盖原文件）" },
+        },
+        required: ["endpoint", "pdf_path"],
+      },
+    },
+  },
   SKILL_TOOL,
   {
     type: "function",
@@ -369,6 +387,45 @@ ${prefs.map((p) => `#${p.id} ${p.text}`).join("\n")}`
 
     case "load_skill":
       return executeLoadSkill(call.args, ctx);
+
+    case "pdf_tool": {
+      const { runStirlingTool } = await import("../stirling");
+      const endpoint = String(call.args.endpoint ?? "").trim();
+      if (!endpoint) throw new Error("缺少 endpoint（如 general/rotate-pdf）");
+      const paths = (Array.isArray(call.args.pdf_paths) && call.args.pdf_paths.length
+        ? call.args.pdf_paths
+        : [call.args.pdf_path]
+      ).map((p) => String(p ?? "").trim()).filter(Boolean);
+      if (!paths.length) throw new Error("缺少 pdf_path");
+      const fields = (call.args.fields ?? {}) as Record<string, string>;
+      const outRel = call.args.output_path ? String(call.args.output_path) : undefined;
+      // 单文件：直接处理；多文件：先并临时逐个跑再由引擎合并的端点自己支持（fileInput 多份）
+      if (paths.length > 1 && /merge/i.test(endpoint)) {
+        const { resolveInWorkspace } = await import("../agent/workspace");
+        const form = new FormData();
+        for (const p of paths) {
+          const abs = resolveInWorkspace(p);
+          if (!fs.existsSync(abs) || fs.statSync(abs).isDirectory()) throw new Error(`PDF 不存在：${p}`);
+          form.append("fileInput", new Blob([fs.readFileSync(abs)], { type: "application/pdf" }), path.basename(abs));
+        }
+        for (const [k, v] of Object.entries(fields)) form.append(k, String(v));
+        const res = await fetch(`http://127.0.0.1:8080/api/v1/${endpoint.replace(/^api\/v1\//, "").replace(/^\/+|\/+$/g, "")}`, {
+          method: "POST", body: form, signal: AbortSignal.timeout(180_000),
+        });
+        if (!res.ok) throw new Error(`Stirling ${endpoint} 失败 HTTP ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        const { resolveInWorkspace: rw, workspaceRoot: wr } = await import("../agent/workspace");
+        void rw;
+        const target = outRel ? path.join(wr(), outRel.split("\\").join("/").replace(/^\/+/, "")) : resolveInWorkspace(paths[0]);
+        if (!path.resolve(target).startsWith(path.resolve(wr()))) throw new Error("输出路径超出工作区");
+        fs.writeFileSync(target, buf);
+        void reindexByPath(path.relative(wr(), target).split("\\").join("/")).catch(() => {});
+        return `已用 Stirling 完成 ${endpoint}（${paths.length} 份 → ${path.relative(wr(), target).split("\\").join("/")}，${buf.length} bytes）`;
+      }
+      const r = await runStirlingTool(endpoint, paths[0], fields, outRel);
+      void reindexByPath(r.savedTo).catch(() => {}); // 编辑联动重建索引（P3 复用）
+      return `已用 Stirling 完成 ${endpoint}，结果保存到 ${r.savedTo}`;
+    }
 
     case "mcp_list_tools": {
       const servers = (getSettings().mcpServers ?? []).filter((s) => s.enabled);

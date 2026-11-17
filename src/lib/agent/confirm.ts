@@ -29,6 +29,7 @@ export const TOOL_RISK: Record<string, Risk> = {
   edit_file: "reversible",
   create_skill: "reversible",
   install_skill: "reversible",
+  pdf_tool: "reversible", // 覆盖/新建文件均可逆（原文件可重做），走确认卡
   mcp_list_tools: "readonly",
   mcp_call_tool: "reversible", // 外部工具副作用未知，保守走确认（P2 §9.3）
 };

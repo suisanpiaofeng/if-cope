@@ -28,6 +28,7 @@ export const TOOL_POLICY: Record<string, { timeoutMs: number; retry: boolean }> 
   edit_file: { timeoutMs: 10_000, retry: false },
   create_skill: { timeoutMs: 10_000, retry: false },
   install_skill: { timeoutMs: 15_000, retry: false },
+  pdf_tool: { timeoutMs: 200_000, retry: false }, // 大 PDF 处理（OCR/压缩）可能很久；工具内自带 180s 上限
   mcp_list_tools: { timeoutMs: 35_000, retry: true },
   mcp_call_tool: { timeoutMs: 35_000, retry: false },
   run_command: { timeoutMs: 130_000, retry: false }, // 执行超时由工具自身控制（≤120s），策略层只兑底
