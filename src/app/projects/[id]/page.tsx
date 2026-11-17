@@ -52,7 +52,7 @@ export default function ProjectViewPage() {
           )}
         </div>
         {/* 三栏工作区 */}
-        <WorkspaceView projectId={Number.isFinite(id) ? id : undefined} />
+        <WorkspaceView projectId={Number.isFinite(id) ? id : undefined} projectDir={project?.dir} />
       </div>
     </div>
   );

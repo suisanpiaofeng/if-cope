@@ -11,7 +11,7 @@ import type { Source } from "@/lib/types";
 import { useLibrary } from "@/lib/useLibrary";
 import { filePreviewKind } from "@/lib/preview";
 
-export default function WorkspaceView({ projectId }: { projectId?: number } = {}) {
+export default function WorkspaceView({ projectId, projectDir }: { projectId?: number; projectDir?: string } = {}) {
   const [tabs, setTabs] = useState<PreviewTab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [generatingNote, setGeneratingNote] = useState<string | null>(null);
@@ -254,6 +254,7 @@ export default function WorkspaceView({ projectId }: { projectId?: number } = {}
           onUpload={lib.upload}
           onAddLink={lib.addLink}
           onAddText={lib.addText}
+          rootPath={projectDir || ""}
         />
       </div>
 

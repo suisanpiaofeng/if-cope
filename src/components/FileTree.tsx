@@ -44,6 +44,7 @@ function kindOf(n: TreeNode): FilterMode {
 export default function FileTree({
   selected, onToggleSelect, onOpenSource, onOpenFile,
   categories, onUpload, onAddLink, onAddText,
+  rootPath = "",
 }: {
   selected: Set<number>;
   onToggleSelect: (id: number) => void;
@@ -53,6 +54,8 @@ export default function FileTree({
   onUpload: (files: File[], categoryId: number | null, type: string, opts?: { path?: string; autoIndex?: boolean }) => Promise<void>;
   onAddLink: (url: string, categoryId: number | null) => Promise<void>;
   onAddText: (text: string, categoryId: number | null) => Promise<void>;
+  /** 视图根（项目视图传项目目录：只看本项目，与其它模块列表风格一致）；空=全树 */
+  rootPath?: string;
 }) {
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ "": true, "资料": true });
@@ -68,12 +71,14 @@ export default function FileTree({
   function load() {
     fetch("/api/files/tree")
       .then((r) => r.json())
-      .then((d: { nodes?: TreeNode[] }) => setNodes(d.nodes ?? []))
+      .then((d: { nodes?: TreeNode[] }) =>
+        setNodes(rootPath ? (d.nodes ?? []).filter((n) => n.path === rootPath || n.path.startsWith(rootPath + "/")) : d.nodes ?? [])
+      )
       .catch(() => setNodes([]));
   }
   useEffect(() => {
     load();
-  }, []);
+  }, [rootPath]);
 
   useEffect(() => {
     const q = query.trim();
@@ -318,6 +323,7 @@ export default function FileTree({
         open={uploadOpen}
         defaultCategoryId={null}
         categories={categories}
+        defaultPath={rootPath || undefined}
         onClose={() => setUploadOpen(false)}
         onUpload={async (files, catId, opts) => {
           await onUpload(files, catId, "其他", opts);

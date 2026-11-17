@@ -9,7 +9,7 @@ const ACCEPT =
 
 /** 添加资料弹窗：上传文件 / 网站 / 复制的文字 三种方式（参考 NotebookLM 形式） */
 export default function UploadModal({
-  open, defaultCategoryId, categories, onClose, onUpload, onAddLink, onAddText,
+  open, defaultCategoryId, categories, onClose, onUpload, onAddLink, onAddText, defaultPath,
 }: {
   open: boolean;
   defaultCategoryId: number | null;
@@ -18,10 +18,11 @@ export default function UploadModal({
   onUpload: (files: File[], categoryId: number | null, opts?: { path?: string; autoIndex?: boolean }) => Promise<void>;
   onAddLink: (url: string, categoryId: number | null) => Promise<void>;
   onAddText: (text: string, categoryId: number | null) => Promise<void>;
+  defaultPath?: string;
 }) {
   const [mode, setMode] = useState<Mode>("file");
   const [categoryId, setCategoryId] = useState<number | null>(defaultCategoryId);
-  const [savePath, setSavePath] = useState("资料");
+  const [savePath, setSavePath] = useState(defaultPath || "资料");
   const [autoIndex, setAutoIndex] = useState(true);
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
@@ -34,7 +35,7 @@ export default function UploadModal({
     if (open) {
       setMode("file");
       setCategoryId(defaultCategoryId);
-      setSavePath("资料");
+      setSavePath(defaultPath || "资料");
       setAutoIndex(true);
       setUrl(""); setText(""); setError(null); setDrag(false); setBusy(false);
     }
