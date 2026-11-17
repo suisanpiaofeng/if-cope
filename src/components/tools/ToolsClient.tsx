@@ -1,269 +1,147 @@
 "use client";
 
-/**
- * 工具库客户端主体（学习 it-tools 的目录 + 搜索 + 收藏 + 最近 + 深链）。
- * - 左栏：搜索框 + 收藏/最近 + 可折叠分类（含计数）
- * - 右侧：选中工具的头部信息 + 懒加载的工具组件
- * - URL 深链：/tools?tool=<id>，刷新/分享直达；工具切换即卸载旧组件（内存纪律）
- */
-import { useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import type { ComponentType } from "react";
+/** 工具库（P5）：Stirling PDF 前端（iframe 嵌入本机 8080 服务）。
+ *  服务由应用启动时自动拉起（vendor/Stirling-PDF.jar + Java17+）；
+ *  PDF 工具处理完的文件下载后可拖入资料树入库。 */
+import { useEffect, useState } from "react";
 import Sidebar from "@/components/Sidebar";
-import { TOOLS, groupByCategory, matchTool, type ToolDef } from "@/lib/tools/registry";
+import { isEditableExt } from "@/lib/preview";
 
-const KEY_FAV = "ifcope.tools.favorites";
-const KEY_RECENT = "ifcope.tools.recent";
-const RECENT_MAX = 8;
+type Project = { id: number; title: string; dir: string; sourceCount: number; artifactCount: number };
 
-function readList(key: string): string[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(key) ?? "[]");
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
+/** 支持直接拖入资料树的扩展名 */
+function canIngest(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return ["pdf", "md", "txt", "docx"].includes(ext) || isEditableExt(ext);
 }
 
 export default function ToolsClient() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [status, setStatus] = useState<"checking" | "ready" | "starting" | "missing">("checking");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const [activeId, setActiveId] = useState<string>(() => {
-    const t = searchParams.get("tool");
-    return t && TOOLS.some((x) => x.id === t) ? t : TOOLS[0].id;
-  });
-  const [query, setQuery] = useState("");
-  const [fav, setFav] = useState<string[]>([]);
-  const [recent, setRecent] = useState<string[]>([]);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-
-  // 挂载后读取 localStorage（避免 SSR/hydration 不一致）
   useEffect(() => {
-    setFav(readList(KEY_FAV).filter((id) => TOOLS.some((t) => t.id === id)));
-    setRecent(readList(KEY_RECENT).filter((id) => TOOLS.some((t) => t.id === id)));
+    fetch("/api/settings").then((r) => r.json())
+      .then((d) => setConfigured(d.hasKey && Boolean(d.baseUrl && d.chatModel)))
+      .catch(() => setConfigured(null));
+    fetch("/api/projects")
+      .then((r) => r.json())
+      .then((d: { projects?: Project[] }) => setProjects(d.projects ?? []))
+      .catch(() => setProjects([]));
+    // 探测 Stirling（首次可能需要 10~30s 启动，轮询）
+    let alive = true;
+    const probe = (n: number) => {
+      if (!alive) return;
+      fetch("/api/stirling/status")
+        .then((r) => r.json())
+        .then((d: { status: string }) => {
+          if (!alive) return;
+          setStatus(d.status as typeof status);
+          if (d.status === "starting" && n < 20) setTimeout(() => probe(n + 1), 3000);
+        })
+        .catch(() => alive && setTimeout(() => probe(n + 1), 3000));
+    };
+    probe(0);
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  // 记录最近使用
-  useEffect(() => {
-    setRecent((prev) => {
-      const next = [activeId, ...prev.filter((x) => x !== activeId)].slice(0, RECENT_MAX);
-      try { localStorage.setItem(KEY_RECENT, JSON.stringify(next)); } catch { /* 忽略配额错误 */ }
-      return next;
-    });
-  }, [activeId]);
-
-  // 深链同步：切换工具时把 ?tool=<id> 写回地址栏（首屏工具不带参数，保持 URL 干净）
-  useEffect(() => {
-    const p = new URLSearchParams(searchParams.toString());
-    if (activeId === TOOLS[0].id) p.delete("tool");
-    else p.set("tool", activeId);
-    const qs = p.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, pathname]);
-
-  const active = TOOLS.find((t) => t.id === activeId) ?? TOOLS[0];
-  const searching = query.trim().length > 0;
-
-  const searchHits = useMemo(
-    () => (searching ? TOOLS.filter((t) => matchTool(t, query)) : []),
-    [query, searching]
-  );
-
-  const favTools = fav.map((id) => TOOLS.find((t) => t.id === id)!).filter(Boolean);
-  const recentTools = recent.map((id) => TOOLS.find((t) => t.id === id)!).filter(Boolean);
-  const categorized = useMemo(() => groupByCategory(TOOLS), []);
-
-  function toggleFav(id: string) {
-    setFav((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      try { localStorage.setItem(KEY_FAV, JSON.stringify(next)); } catch { /* 忽略 */ }
-      return next;
-    });
+  /** Stirling 产物直接入库到所选项目（资料/<原文件名>） */
+  async function ingestDownloaded(file: File) {
+    if (!projectId) {
+      setNotice("请先选择要入库的项目");
+      return;
+    }
+    const project = projects.find((p) => p.id === projectId);
+    if (!canIngest(file.name)) {
+      setNotice(`「${file.name}」不是可入库类型（支持 pdf/md/txt/docx 及文本类）`);
+      return;
+    }
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("path", project?.dir ?? "资料");
+    fd.append("type", "其他");
+    const r = await fetch("/api/sources", { method: "POST", body: fd }).catch(() => null);
+    const d = await r?.json().catch(() => null);
+    if (!r?.ok) setNotice(d?.error ?? "入库失败");
+    else setNotice(`《${file.name}》已入库到「${project?.title}」`);
   }
 
   return (
     <div className="flex h-screen overflow-hidden bg-white">
-      <Sidebar configured={null} />
-
-      {/* 左栏：目录 */}
-      <div className="flex w-[248px] shrink-0 flex-col border-r border-neutral-200">
-        <div className="border-b border-neutral-200 px-4 py-3">
-          <div className="flex items-baseline justify-between">
-            <span className="text-[15px] font-semibold tracking-tight">工具库</span>
-            <span className="num text-[11px] text-neutral-400">{TOOLS.length} 个</span>
-          </div>
-          <div className="mt-0.5 text-[11px] text-neutral-400">纯本地运行 · 文件不上传</div>
-          <div className="relative mt-2.5">
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索工具…"
-              className="w-full rounded-md border border-neutral-200 py-1.5 pl-7 pr-2 text-xs outline-none focus:border-neutral-400"
-            />
-            <svg className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-400"
-              viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <circle cx="7" cy="7" r="4.4" /><path d="M10.3 10.3 14 14" strokeLinecap="round" />
-            </svg>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto py-2">
-          {searching ? (
-            <Section title={`搜索结果 · ${searchHits.length}`}>
-              {searchHits.length ? (
-                searchHits.map((t) => (
-                  <ToolRow key={t.id} tool={t} active={t.id === activeId}
-                    onSelect={() => setActiveId(t.id)} faved={fav.includes(t.id)}
-                    onToggleFav={() => toggleFav(t.id)} />
-                ))
-              ) : (
-                <div className="px-4 py-3 text-xs text-neutral-400">没有匹配的工具</div>
-              )}
-            </Section>
-          ) : (
-            <>
-              {favTools.length > 0 && (
-                <Section title="★ 收藏">
-                  {favTools.map((t) => (
-                    <ToolRow key={t.id} tool={t} active={t.id === activeId}
-                      onSelect={() => setActiveId(t.id)} faved onToggleFav={() => toggleFav(t.id)} />
-                  ))}
-                </Section>
-              )}
-              {recentTools.length > 0 && (
-                <Section title="最近使用">
-                  {recentTools.map((t) => (
-                    <ToolRow key={t.id} tool={t} active={t.id === activeId}
-                      onSelect={() => setActiveId(t.id)} faved={fav.includes(t.id)}
-                      onToggleFav={() => toggleFav(t.id)} />
-                  ))}
-                </Section>
-              )}
-              {categorized.map(([cat, tools]) => {
-                const isCollapsed = !!collapsed[cat];
-                return (
-                  <div key={cat} className="mb-0.5">
-                    <button
-                      onClick={() => setCollapsed((c) => ({ ...c, [cat]: !c[cat] }))}
-                      className="flex w-full items-center justify-between px-4 pb-1 pt-2.5 text-[10px] uppercase tracking-wider text-neutral-400 hover:text-neutral-600"
-                    >
-                      <span>{cat}</span>
-                      <span className="num flex items-center gap-1">
-                        {tools.length}
-                        <svg className={`h-2.5 w-2.5 transition-transform ${isCollapsed ? "-rotate-90" : ""}`}
-                          viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6">
-                          <path d="M3 4.5 6 7.5 9 4.5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </span>
-                    </button>
-                    {!isCollapsed &&
-                      tools.map((t) => (
-                        <ToolRow key={t.id} tool={t} active={t.id === activeId}
-                          onSelect={() => setActiveId(t.id)} faved={fav.includes(t.id)}
-                          onToggleFav={() => toggleFav(t.id)} />
-                      ))}
-                  </div>
-                );
-              })}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* 右侧：工具区 */}
-      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-        <div className="flex items-start justify-between border-b border-neutral-200 px-6 py-3">
-          <div>
-            <div className="text-[15px] font-semibold">{active.name}</div>
-            <div className="mt-0.5 text-[12px] text-neutral-500">{active.desc}</div>
-          </div>
-          <button
-            onClick={() => toggleFav(active.id)}
-            title={fav.includes(active.id) ? "取消收藏" : "收藏"}
-            className={`shrink-0 rounded-md border px-2.5 py-1 text-xs transition-colors ${
-              fav.includes(active.id)
-                ? "border-amber-300 bg-amber-50 text-amber-600"
-                : "border-neutral-300 text-neutral-500 hover:bg-neutral-50"
+      <Sidebar configured={configured} />
+      <main className="flex min-w-0 flex-1 flex-col">
+        {/* 顶栏：状态 + 入库目标 */}
+        <div className="flex items-center gap-3 border-b border-neutral-200 px-5 py-2.5">
+          <h1 className="text-[15px] font-semibold">PDF 工具库</h1>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] ${
+              status === "ready"
+                ? "bg-emerald-50 text-emerald-700"
+                : status === "missing"
+                  ? "bg-neutral-100 text-neutral-400"
+                  : "bg-amber-50 text-amber-700"
             }`}
           >
-            {fav.includes(active.id) ? "★ 已收藏" : "☆ 收藏"}
-          </button>
+            {status === "ready" ? "服务运行中" : status === "missing" ? "未安装" : "启动中…"}
+          </span>
+          <span className="ml-auto text-[11px] text-neutral-400">50+ PDF 工具 · 本地处理不上传外部服务</span>
+          <select
+            value={projectId ?? ""}
+            onChange={(e) => setProjectId(e.target.value ? Number(e.target.value) : null)}
+            className="rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none"
+          >
+            <option value="">处理结果入库到…</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.title}</option>
+            ))}
+          </select>
         </div>
-        <div className="flex-1 px-6 py-5">
-          <ToolHost tool={active} />
-        </div>
+
+        {status === "missing" ? (
+          <div className="flex flex-1 flex-col items-center justify-center text-center">
+            <p className="text-sm text-neutral-500">未找到 Stirling PDF（vendor/Stirling-PDF.jar）</p>
+            <p className="mt-1 text-xs text-neutral-400">下载 Release jar 放入 vendor/ 后重启应用即可（需 Java 17+）</p>
+          </div>
+        ) : status !== "ready" ? (
+          <div className="flex flex-1 flex-col items-center justify-center text-center">
+            <p className="text-sm text-neutral-500">Stirling PDF 启动中（首次约 10~30 秒）…</p>
+            <div className="mt-3 h-1 w-40 overflow-hidden rounded bg-neutral-100">
+              <div className="h-full w-1/2 animate-pulse rounded bg-neutral-400" />
+            </div>
+          </div>
+        ) : (
+          <>
+            {notice && (
+              <div className="mx-4 mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-800">
+                {notice}
+              </div>
+            )}
+            {/* Stirling 前端：全量 50+ 工具（处理完的文件经浏览器下载 → 上面选好项目 → 拖到这里入库） */}
+            <div
+              className="min-h-0 flex-1"
+              onDragOver={(e) => {
+                if (Array.from(e.dataTransfer.types).includes("Files")) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                const f = e.dataTransfer.files?.[0];
+                if (f) {
+                  e.preventDefault();
+                  void ingestDownloaded(f);
+                }
+              }}
+            >
+              <iframe src="http://127.0.0.1:8080" title="Stirling PDF" className="h-full min-h-0 w-full border-0" />
+            </div>
+            <p className="border-t border-neutral-100 px-4 py-1.5 text-[10px] text-neutral-400">
+              处理完成的文件会经浏览器下载 → 把下载的文件拖到本区域即可入库到所选项目（支持 pdf/md/txt/docx）
+            </p>
+          </>
+        )}
       </main>
     </div>
   );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-0.5">
-      <div className="px-4 pb-1 pt-2 text-[10px] uppercase tracking-wider text-neutral-400">{title}</div>
-      {children}
-    </div>
-  );
-}
-
-function ToolRow({ tool, active, onSelect, faved, onToggleFav }: {
-  tool: ToolDef; active: boolean; onSelect: () => void; faved: boolean; onToggleFav: () => void;
-}) {
-  return (
-    <div
-      className={`group relative flex items-stretch border-l-2 ${
-        active ? "border-neutral-900 bg-neutral-100" : "border-transparent"
-      }`}
-    >
-      <button
-        onClick={onSelect}
-        className={`min-w-0 flex-1 truncate px-4 py-1.5 text-left text-[13px] transition-colors ${
-          active ? "font-medium text-neutral-900" : "text-neutral-600 hover:bg-neutral-50"
-        }`}
-      >
-        {tool.name}
-      </button>
-      <button
-        onClick={onToggleFav}
-        title={faved ? "取消收藏" : "收藏"}
-        className={`shrink-0 px-2 text-[13px] transition-opacity ${
-          faved ? "text-amber-500" : "text-neutral-300 opacity-0 hover:text-amber-500 group-hover:opacity-100"
-        }`}
-      >
-        ★
-      </button>
-    </div>
-  );
-}
-
-/** 选中工具的懒加载宿主：切换即卸载旧组件、加载新组件 */
-function ToolHost({ tool }: { tool: ToolDef }) {
-  const [Comp, setComp] = useState<ComponentType | null>(null);
-  const [err, setErr] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    setComp(null);
-    setErr("");
-    tool
-      .load()
-      .then((m) => { if (!cancelled) setComp(() => m.default); })
-      .catch((e) => { if (!cancelled) setErr(e instanceof Error ? e.message : String(e)); });
-    return () => { cancelled = true; };
-  }, [tool]);
-
-  if (err) {
-    return (
-      <div className="border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-        工具加载失败：{err}
-      </div>
-    );
-  }
-  if (!Comp) {
-    return <div className="py-8 text-center text-xs text-neutral-400">加载中…</div>;
-  }
-  return <Comp />;
 }

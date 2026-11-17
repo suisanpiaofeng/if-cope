@@ -3,5 +3,7 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { startRevProxy } = await import("./lib/classroom/revProxy");
     startRevProxy();
+    const { startStirling } = await import("./lib/stirling");
+    startStirling();
   }
 }
