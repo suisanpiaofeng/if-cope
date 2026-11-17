@@ -27,7 +27,6 @@ import EdgeDialog from "@/components/qa-map/EdgeDialog";
 import RepairDialog, { type RepairSuggestion } from "@/components/qa-map/RepairDialog";
 import AnalyzeDialog from "@/components/qa-map/AnalyzeDialog";
 import SourcePreviewDrawer from "@/components/qa-map/SourcePreviewDrawer";
-import { DND_MIME, readDnd } from "@/lib/dnd";
 import {
   autoLayout,
   edgeId,
@@ -94,7 +93,6 @@ export default function SolvePage() {
   const lib = useLibrary({ sourceFilter: (s) => s.status === "ready" });
   const { sources, categories, selected: contextIds } = lib;
   const [previewSource, setPreviewSource] = useState<Source | null>(null);
-  const [dropOver, setDropOver] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<{
     edgeId: string;
     end: "from" | "to";
@@ -880,7 +878,7 @@ export default function SolvePage() {
             }
             bottomSlot={
               <p className="border-t border-neutral-200 px-3 py-2 text-[10px] text-neutral-400">
-                勾选或拖资源到下方对话框 = 指定依据；不指定 = 自动检索全部
+                勾选资源 = 指定答题依据（右栏胶囊可移除）；不指定 = 自动检索
               </p>
             }
           />
@@ -928,32 +926,6 @@ export default function SolvePage() {
             placeholder="地图标题"
           />
           <span className="num shrink-0 text-[10px] text-neutral-400">{saveState}</span>
-          {/* 检索范围：多选项目（不选=全部） */}
-          <span className="relative shrink-0">
-            <button
-              onClick={() => setScopeOpen((o) => !o)}
-              title="限定答题检索的项目范围"
-              className="border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50"
-            >
-              检索范围：{(active?.projectScope ?? []).length ? `${active!.projectScope!.length} 个项目` : "全部"} ▾
-            </button>
-            {scopeOpen && (
-              <div className="absolute right-0 top-8 z-20 w-60 rounded-lg border border-neutral-200 bg-white p-2 shadow-lg">
-                <p className="px-1 pb-1 text-[10px] text-neutral-400">勾选项目限定答题检索范围（不选=全部项目）</p>
-                {projects.map((p) => (
-                  <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-neutral-50">
-                    <input
-                      type="checkbox"
-                      checked={(active?.projectScope ?? []).includes(p.id)}
-                      onChange={() => toggleScope(p.id)}
-                    />
-                    {p.title}
-                  </label>
-                ))}
-                {projects.length === 0 && <p className="px-1 py-1 text-[10px] text-neutral-300">暂无项目</p>}
-              </div>
-            )}
-          </span>
           <div className="flex shrink-0 items-center gap-1">
             <button
               onClick={undo}
@@ -1112,98 +1084,7 @@ export default function SolvePage() {
               </div>
             )}
 
-            {/* 底部对话框（悬浮，可拖入资源） */}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center pb-4">
-              <div
-                className={`pointer-events-auto w-[640px] rounded-lg border bg-white shadow-lg transition-colors ${
-                  dropOver ? "border-violet-500 ring-1 ring-violet-300" : "border-neutral-300"
-                }`}
-                onDragOver={(e) => {
-                  if (e.dataTransfer.types.includes(DND_MIME)) {
-                    e.preventDefault();
-                    setDropOver(true);
-                  }
-                }}
-                onDragLeave={() => setDropOver(false)}
-                onDrop={(e) => {
-                  const p = readDnd(e.dataTransfer);
-                  setDropOver(false);
-                  if (p && p.kind === "source") {
-                    lib.addSelection(p.ids);
-                  }
-                }}
-              >
-                {contextIds.size > 0 && (
-                  <div className="flex flex-wrap gap-1.5 border-b border-neutral-100 px-3 py-1.5">
-                    {[...contextIds].map((id) => (
-                      <span key={id} className="flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700">
-                        <span className="max-w-[120px] truncate">{sources.find((s) => s.id === id)?.title ?? id}</span>
-                        <button
-                          onClick={() => lib.removeSelection(id)}
-                          className="text-violet-400 hover:text-violet-700"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <div className="flex items-start gap-2 p-2">
-                  <button
-                    onClick={() => fileRef.current?.click()}
-                    title="附题目照片"
-                    className="mt-1 shrink-0 rounded border border-neutral-200 px-2 py-1.5 text-xs text-neutral-500 hover:bg-neutral-50"
-                  >
-                    📷
-                  </button>
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/*"
-                    hidden
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (!f) return;
-                      const r = new FileReader();
-                      r.onload = () => setImage({ dataUrl: String(r.result), name: f.name });
-                      r.readAsDataURL(f);
-                    }}
-                  />
-                  <textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        if (input.trim()) void ask(input.trim());
-                      }
-                    }}
-                    rows={2}
-                    placeholder={
-                      attachNode
-                        ? `输入问题，Enter 发送（选中「${attachNode.title}」，不相关会自动开新话题）…`
-                        : "输入问题，Enter 发送（追问/新话题自动判断）…"
-                    }
-                    className="min-w-0 flex-1 resize-none rounded border border-neutral-200 px-2.5 py-1.5 text-sm outline-none focus:border-neutral-400"
-                  />
-                  <button
-                    onClick={() => input.trim() && void ask(input.trim())}
-                    disabled={!!busyKey || !input.trim()}
-                    className="mt-1 shrink-0 rounded border border-neutral-900 bg-neutral-900 px-3.5 py-1.5 text-xs text-white hover:bg-neutral-700 disabled:opacity-40"
-                  >
-                    {busyKey ? "…" : "发送"}
-                  </button>
-                </div>
-                {image && (
-                  <div className="flex items-center gap-1.5 border-t border-neutral-100 px-3 py-1 text-[11px] text-neutral-500">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={image.dataUrl} alt="" className="h-5 w-5 object-cover" />
-                    <span className="truncate">{image.name}</span>
-                    <button onClick={() => setImage(null)} className="text-neutral-400 hover:text-red-600">×</button>
-                  </div>
-                )}
-              </div>
-            </div>
+            {/* 底部悬浮问答框已删（2026-11-15 用户反馈）：地图问答迁入右栏「解题对话」，避免与工作对话混淆 */}
           </div>
 
           {/* 右侧预览抽屉 */}
@@ -1212,17 +1093,128 @@ export default function SolvePage() {
         </div>
       </main>
 
-      {/* 右栏：常驻解题对话（跨模块共享历史；多选检索范围在工具条定） */}
-      <div className="w-[340px] shrink-0 border-l border-neutral-300">
-        <ChatPanel
-          sources={lib.sources}
-          artifacts={lib.artifacts}
-          selected={contextIds}
-          selectedArts={new Set()}
-          onSelectionReset={() => {}}
-          onToggleSource={(id) => lib.toggleSelect(id)}
-          onToggleArtifact={() => {}}
-        />
+      {/* 右栏：解题对话（地图问答专用，走 /api/ask 生成卡片；2026-11-15 用户反馈：替代底部悬浮框） */}
+      <div className="flex w-[340px] shrink-0 flex-col border-l border-neutral-300">
+        {/* 标题与范围：地图问答的归属信息 */}
+        <div className="border-b border-neutral-100 px-3 py-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] font-semibold text-neutral-700">解题对话</span>
+            <span className="relative">
+              <button
+                onClick={() => setScopeOpen((o) => !o)}
+                title="限定答题检索的项目范围"
+                className="rounded border border-neutral-200 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-50"
+              >
+                范围：{(active?.projectScope ?? []).length ? `${active!.projectScope!.length} 项目` : "全部"}
+              </button>
+              {scopeOpen && (
+                <div className="absolute right-0 top-6 z-20 w-56 rounded-lg border border-neutral-200 bg-white p-2 shadow-lg">
+                  <p className="px-1 pb-1 text-[10px] text-neutral-400">勾选项目限定答题检索范围（不选=全部项目）</p>
+                  {projects.map((p) => (
+                    <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-neutral-50">
+                      <input
+                        type="checkbox"
+                        checked={(active?.projectScope ?? []).includes(p.id)}
+                        onChange={() => toggleScope(p.id)}
+                      />
+                      {p.title}
+                    </label>
+                  ))}
+                  {projects.length === 0 && <p className="px-1 py-1 text-[10px] text-neutral-300">暂无项目</p>}
+                </div>
+              )}
+            </span>
+          </div>
+          {/* 指定依据胶囊（原底部悬浮框的勾选联动） */}
+          {contextIds.size > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {[...contextIds].map((id) => (
+                <span key={id} className="flex max-w-[140px] items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700">
+                  <span className="truncate">{sources.find((s) => s.id === id)?.title ?? id}</span>
+                  <button onClick={() => lib.removeSelection(id)} className="text-violet-400 hover:text-violet-700">×</button>
+                </span>
+              ))}
+            </div>
+          )}
+          {attachNode && (
+            <p className="mt-1.5 truncate text-[10px] text-amber-700">↳ 追问将挂到选中卡「{attachNode.title}」</p>
+          )}
+        </div>
+
+        {/* 卡片流：本地图的问答结果（新卡/追问/整理在画布上呈现） */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-[12px] leading-5 text-neutral-600">
+          {busyKey ? (
+            <p className="text-neutral-400">思考中…（卡片生成后自动挂上画布）</p>
+          ) : attachNode ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-2">
+              <p className="text-[10px] font-medium text-amber-700">当前追问目标</p>
+              <p className="mt-1 font-medium text-neutral-800">{attachNode.title}</p>
+              <p className="mt-0.5 line-clamp-3 text-[11px] text-neutral-500">{attachNode.question}</p>
+            </div>
+          ) : (
+            <p className="text-neutral-400">在下方输入问题；新问题会生成新卡挂上地图，与已有卡相关时自动连线。</p>
+          )}
+          {error && <p className="mt-2 text-red-600">{error}</p>}
+          {notice && <p className="mt-2 text-emerald-700">{notice}</p>}
+        </div>
+
+        {/* 输入区：📷拍题 + 问题（Enter 发送） */}
+        <div className="border-t border-neutral-100 p-2">
+          <div className="flex items-start gap-1.5">
+            <button
+              onClick={() => fileRef.current?.click()}
+              title="附题目照片"
+              className="mt-1 shrink-0 rounded border border-neutral-200 px-2 py-1.5 text-xs text-neutral-500 hover:bg-neutral-50"
+            >
+              📷
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                const r = new FileReader();
+                r.onload = () => setImage({ dataUrl: String(r.result), name: f.name });
+                r.readAsDataURL(f);
+              }}
+            />
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (input.trim() && !busyKey) void ask(input.trim());
+                }
+              }}
+              rows={2}
+              placeholder={
+                attachNode
+                  ? `追问「${attachNode.title}」…（不相关自动开新话题）`
+                  : "输入问题，Enter 发送…"
+              }
+              className="min-w-0 flex-1 resize-none rounded border border-neutral-200 px-2.5 py-1.5 text-sm outline-none focus:border-neutral-400"
+            />
+            <button
+              onClick={() => input.trim() && !busyKey && void ask(input.trim())}
+              disabled={!!busyKey || !input.trim()}
+              className="mt-1 shrink-0 rounded border border-neutral-900 bg-neutral-900 px-3 py-1.5 text-xs text-white hover:bg-neutral-700 disabled:opacity-40"
+            >
+              {busyKey ? "…" : "发送"}
+            </button>
+          </div>
+          {image && (
+            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-500">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={image.dataUrl} alt="" className="h-5 w-5 object-cover" />
+              <span className="truncate">{image.name}</span>
+              <button onClick={() => setImage(null)} className="text-neutral-400 hover:text-red-600">×</button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
