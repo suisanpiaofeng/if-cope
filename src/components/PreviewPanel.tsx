@@ -9,6 +9,13 @@ import { downloadArtifact } from "@/lib/download";
 import NoteRenderer from "@/components/notes/NoteRenderer";
 import CodeEditor from "./CodeEditor";
 import { lineDiff } from "@/lib/agent/diff";
+import type { SheetAoa } from "./UniverSheet";
+import dynamic from "next/dynamic";
+
+const UniverSheetView = dynamic(() => import("./UniverSheet"), {
+  ssr: false,
+  loading: () => <p className="pt-20 text-center text-sm text-neutral-400">编辑器加载中…</p>,
+});
 import { Markdown, CodeBlock } from "./Markdown";
 
 export type SaveFileResult = {
@@ -80,9 +87,45 @@ export default function PreviewPanel({
   }, []);
 
   const activeFile = active?.kind === "file" ? active : null;
+  const isSheet = activeFile && ["csv", "xlsx"].includes(activeFile.ext.toLowerCase());
+  const [sheetData, setSheetData] = useState<Record<string, SheetAoa | null>>({}); // 按 tab key 缓存解析结果
   const canEdit = Boolean(
-    activeFile && !activeFile.loading && !activeFile.error && activeFile.text != null && isEditableExt(activeFile.ext)
+    activeFile && !activeFile.loading && !activeFile.error && activeFile.text != null && isEditableExt(activeFile.ext) && !isSheet
   );
+
+  // 表格文件解析（P5）：csv → 文本切列；xlsx → /api/preview 二进制 → SheetJS
+  useEffect(() => {
+    if (!isSheet || !activeFile || sheetData[activeFile.key] !== undefined) return;
+    let disposed = false;
+    (async () => {
+      try {
+        if (activeFile.ext.toLowerCase() === "csv") {
+          const text = activeFile.text ?? "";
+          const aoa = text.split(/\r?\n/).map((line) => line.split(",").map((c) => c.replace(/^"|"$/g, "")));
+          if (!disposed) setSheetData((d) => ({ ...d, [activeFile.key]: [{ name: "Sheet1", aoa }] }));
+        } else {
+          const XLSX = await import("xlsx");
+          // 工作区文件走 raw 流；源文件（已入库）走 /api/preview 二进制
+          const url =
+            "wsPath" in activeFile && activeFile.wsPath
+              ? `/api/workspace/file?path=${encodeURIComponent(activeFile.wsPath)}&raw=1`
+              : `/api/preview/${activeFile.id}`;
+          const buf = await fetch(url).then((r) => r.arrayBuffer());
+          const wb = XLSX.read(buf, { type: "array" });
+          const sheets: SheetAoa = wb.SheetNames.map((n) => ({
+            name: n,
+            aoa: XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: "" }) as unknown[][],
+          }));
+          if (!disposed) setSheetData((d) => ({ ...d, [activeFile.key]: sheets }));
+        }
+      } catch {
+        if (!disposed) setSheetData((d) => ({ ...d, [activeFile.key]: null }));
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [isSheet, activeFile, sheetData]);
   const dirty = Boolean(
     activeFile && canEdit && drafts[activeFile.key] !== undefined && drafts[activeFile.key] !== activeFile.text
   );
@@ -207,7 +250,7 @@ export default function PreviewPanel({
         </div>
       )}
 
-      {/* 内容区：文本类直接进编辑器；Markdown 左右分屏实时渲染；其余只读；对比态渲染行 diff */}
+      {/* 内容区：文本类直接进编辑器；Markdown 左右分屏；表格走 Univer；其余只读；对比态渲染行 diff */}
       {canEdit && activeFile && diffView[activeFile.key] ? (
         <div className="min-h-0 flex-1 overflow-auto bg-neutral-50/40 px-4 py-3" style={{ zoom }}>
           {lineDiff(activeFile.text ?? "", drafts[activeFile.key] ?? "").map((l, i) => (
@@ -221,6 +264,49 @@ export default function PreviewPanel({
               {l.text || "（空行）"}
             </div>
           ))}
+        </div>
+      ) : isSheet && activeFile ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          {sheetData[activeFile.key] === null ? (
+            <p className="pt-20 text-center text-sm text-red-500">表格解析失败（文件可能损坏或不是有效的 csv/xlsx）</p>
+          ) : sheetData[activeFile.key] ? (
+            (() => {
+              const data = sheetData[activeFile.key]!;
+              return (
+                <UniverSheetView
+                  key={activeFile.key}
+                  sheets={data}
+                  fileName={activeFile.title}
+                  onSave={async (out) => {
+                    if ("wsPath" in activeFile && activeFile.wsPath) {
+                      if (activeFile.ext.toLowerCase() === "csv") {
+                        const text = out.map((s) => s.aoa.map((r) => r.map((c) => (c == null ? "" : String(c).includes(",") ? `"${c}"` : String(c))).join(",")).join("\n")).join("\n");
+                        setDrafts((d) => ({ ...d, [activeFile.key]: text }));
+                        await saveActive();
+                      } else {
+                        const XLSX = await import("xlsx");
+                        const wb = XLSX.utils.book_new();
+                        for (const s of out) {
+                          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s.aoa), s.name.slice(0, 31) || "Sheet");
+                        }
+                        const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+                        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+                        const r = await fetch("/api/workspace/file", {
+                          method: "PUT", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ path: activeFile.wsPath, content: b64, base64: true }),
+                        });
+                        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+                      }
+                    } else {
+                      throw new Error("旧资料（无路径）不支持在线保存，可下载后重新上传");
+                    }
+                  }}
+                />
+              );
+            })()
+          ) : (
+            <p className="pt-20 text-center text-sm text-neutral-400">表格解析中…</p>
+          )}
         </div>
       ) : canEdit && activeFile ? (
         activeFile.fileType === "markdown" ? (

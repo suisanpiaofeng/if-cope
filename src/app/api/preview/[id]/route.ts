@@ -75,8 +75,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ error: "原始文件已丢失" }, { status: 404 });
   }
 
-  // 图片/PDF：直接回原始二进制，浏览器原生渲染
-  if (kind === "image" || kind === "pdf") {
+  // 图片/PDF/表格：回原始二进制（浏览器/SheetJS/Univer 客户端处理）
+  if (kind === "image" || kind === "pdf" || kind === "sheet") {
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": MIME[src.ext] ?? "application/octet-stream",

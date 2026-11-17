@@ -9,6 +9,20 @@ export const runtime = "nodejs";
 /** 工作区文件 API（harness P0 §3.3）：GET 读文件/列目录、PUT 写（expectedOld 冲突提示）、DELETE 删文件 */
 export async function GET(req: NextRequest) {
   const rel = String(req.nextUrl.searchParams.get("path") ?? "");
+  // raw=1：原始字节流（Univer/SheetJS 客户端解析 xlsx 等二进制）
+  if (req.nextUrl.searchParams.get("raw") === "1") {
+    try {
+      const abs = resolveInWorkspace(rel);
+      if (!fs.existsSync(abs) || fs.statSync(abs).isDirectory()) {
+        return NextResponse.json({ error: `路径不存在：${rel}` }, { status: 404 });
+      }
+      return new NextResponse(new Uint8Array(fs.readFileSync(abs)), {
+        headers: { "Content-Type": "application/octet-stream", "Cache-Control": "private, max-age=30" },
+      });
+    } catch (e) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 400 });
+    }
+  }
   try {
     const abs = resolveInWorkspace(rel);
     if (!fs.existsSync(abs)) {
@@ -47,11 +61,18 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-  const body = (await req.json()) as { path?: string; content?: string; expectedOld?: string; mkdir?: boolean };
+  const body = (await req.json()) as { path?: string; content?: string; expectedOld?: string; mkdir?: boolean; base64?: boolean };
   const rel = String(body.path ?? "");
-  const content = String(body.content ?? "");
   try {
     const abs = resolveInWorkspace(rel);
+    // base64 二进制写回（Univer xlsx 等编辑器保存用）
+    if (body.base64) {
+      const buf = Buffer.from(String(body.content ?? ""), "base64");
+      fs.writeFileSync(abs, buf);
+      void reindexByPath(rel.split("\\").join("/")).catch(() => {});
+      return NextResponse.json({ ok: true, path: rel, size: buf.length });
+    }
+    const content = String(body.content ?? "");
     if (body.mkdir) {
       fs.mkdirSync(abs, { recursive: true });
       return NextResponse.json({ ok: true, path: rel, mkdir: true });

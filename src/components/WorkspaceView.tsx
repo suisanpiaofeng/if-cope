@@ -102,7 +102,7 @@ export default function WorkspaceView({ projectId, projectDir }: { projectId?: n
     // 引用溯源（quote）时直接走解析块视图（定位到对应块）
     const kind = s.source_type === "file" ? filePreviewKind(s.ext) : null;
     if (kind && !quote) {
-      const streaming = kind === "image" || kind === "pdf"; // 浏览器原生渲染，无需取文本
+      const streaming = kind === "image" || kind === "pdf" || kind === "sheet"; // 原生渲染/客户端解析，无需取文本
       setTabs((t) => [...t, { key, kind: "file", fileType: kind, ext: s.ext, id: s.id, title: s.title, loading: !streaming }]);
       setActiveKey(key);
       if (!streaming) {
@@ -214,15 +214,22 @@ export default function WorkspaceView({ projectId, projectDir }: { projectId?: n
       setActiveKey(key);
       return;
     }
+    const ext = name.includes(".") ? name.split(".").pop()! : "";
+    const kind = filePreviewKind(ext) ?? "text";
+    // 表格类：不取 JSON 文本，直接由预览面板拉 raw 流解析
+    if (kind === "sheet") {
+      setTabs((t) => [...t, { key, kind: "file", fileType: "sheet", ext, id: -1, title: name, wsPath: path }]);
+      setActiveKey(key);
+      return;
+    }
     setTabs((t) => [
       ...t,
-      { key, kind: "file", fileType: "markdown" as const, ext: "", id: -1, title: name, loading: true, wsPath: path },
+      { key, kind: "file" as const, fileType: kind, ext, id: -1, title: name, loading: true, wsPath: path },
     ]);
     setActiveKey(key);
     fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`)
       .then((r) => r.json())
       .then((d) => {
-        const ext = name.includes(".") ? name.split(".").pop()! : "";
         setTabs((t) =>
           t.map((x) =>
             x.key === key
