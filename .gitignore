@@ -14,3 +14,4 @@ verify/cvs-cookie.txt
 # 参考项目克隆（只读研究用，不参与编译/提交）
 ref/
 .superpowers/
+vendor/
