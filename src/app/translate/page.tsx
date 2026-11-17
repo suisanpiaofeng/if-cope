@@ -10,6 +10,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Sidebar from "@/components/Sidebar";
 import FilesPanel from "@/components/FilesPanel";
+import ChatPanel from "@/components/ChatPanel";
 import type { AnyTranslationDoc, Source, TranslationDoc } from "@/lib/types";
 import { isPdfDoc } from "@/lib/types";
 import { useLibrary } from "@/lib/useLibrary";
@@ -232,6 +233,9 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
   return (
     <div className="flex h-screen overflow-hidden bg-white">
       <Sidebar configured={null} />
+
+      {/* 中区：左栏+预览；右侧常驻工作对话（P4 定稿 §3.4：文献翻译模块也挂对话） */}
+      <div className="flex min-w-0 flex-1">
 
       {/* 左栏：共享资源栏（视图 = 仅 PDF）+ 翻译历史 */}
       <div className="flex w-[280px] shrink-0 flex-col">
@@ -527,6 +531,20 @@ tr.pagebreak td{border:none;text-align:center;color:#999;padding:6px}
           </>
         )}
       </main>
+
+      {/* 右栏：常驻工作对话（跨模块共享历史；翻译产物可检索提问） */}
+      <div className="w-[340px] shrink-0 border-l border-neutral-300">
+        <ChatPanel
+          sources={lib.sources}
+          artifacts={lib.artifacts}
+          selected={new Set()}
+          selectedArts={new Set()}
+          onSelectionReset={() => {}}
+          onToggleSource={() => {}}
+          onToggleArtifact={() => {}}
+        />
+      </div>
+      </div>
     </div>
   );
 }

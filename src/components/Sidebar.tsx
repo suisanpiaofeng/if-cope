@@ -34,7 +34,7 @@ export default function Sidebar({ configured }: { configured: boolean | null }) 
         )}
       </div>
 
-      <nav className={`flex-1 space-y-1 ${collapsed ? "px-2" : "px-2.5"}`}>
+      <nav className={`space-y-1 ${collapsed ? "px-2" : "px-2.5"}`}>
         <NavItem collapsed={collapsed} icon="grid" label="项目" href="/projects" />
         <NavItem collapsed={collapsed} icon="solve" label="解题答疑" href="/solve" />
         <NavItem collapsed={collapsed} icon="translate" label="文献翻译" href="/translate" />
@@ -42,9 +42,9 @@ export default function Sidebar({ configured }: { configured: boolean | null }) 
         <NavItem collapsed={collapsed} icon="classroom" label="课堂" href="/classroom" />
       </nav>
 
-      {/* 最近项目槽位：×=移出槽位（不删项目）；点击进项目视图 */}
+      {/* 最近项目槽位：紧跟功能模块下方（OpenFic 同款）；×=移出槽位（不删项目） */}
       {recents.length > 0 && (
-        <div className={`space-y-1 border-t border-neutral-100 py-2 ${collapsed ? "px-2" : "px-2.5"}`}>
+        <div className={`space-y-1 py-2 ${collapsed ? "px-2" : "px-2.5"}`}>
           {!collapsed && <p className="px-1 pb-1 text-[10px] uppercase tracking-wider text-neutral-300">最近项目</p>}
           {recents.map((p) => (
             <div key={p.id} className="group flex items-center gap-1.5">

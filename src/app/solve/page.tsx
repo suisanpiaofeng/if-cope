@@ -20,6 +20,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import Sidebar from "@/components/Sidebar";
 import FilesPanel from "@/components/FilesPanel";
+import ChatPanel from "@/components/ChatPanel";
 import QAMapCard, { type QaMapRFNode } from "@/components/qa-map/QAMapCard";
 import EdgesOverlay from "@/components/qa-map/EdgesOverlay";
 import EdgeDialog from "@/components/qa-map/EdgeDialog";
@@ -793,6 +794,8 @@ export default function SolvePage() {
     <div className="flex h-screen overflow-hidden bg-white">
       <Sidebar configured={null} />
 
+      {/* 右侧常驻解题对话（P4 定稿 §3.4：知识地图模块独享解题对话；先挂后置避免改画布内部结构） */}
+
       {/* 左栏：共享资源栏（视图 = 仅 ready）；地图管理挂 topSlot */}
       <div className="flex w-[260px] shrink-0 flex-col">
         <div className="border-b border-neutral-200 px-4 py-3">
@@ -1208,6 +1211,19 @@ export default function SolvePage() {
 
         </div>
       </main>
+
+      {/* 右栏：常驻解题对话（跨模块共享历史；多选检索范围在工具条定） */}
+      <div className="w-[340px] shrink-0 border-l border-neutral-300">
+        <ChatPanel
+          sources={lib.sources}
+          artifacts={lib.artifacts}
+          selected={contextIds}
+          selectedArts={new Set()}
+          onSelectionReset={() => {}}
+          onToggleSource={(id) => lib.toggleSelect(id)}
+          onToggleArtifact={() => {}}
+        />
+      </div>
     </div>
   );
 }
